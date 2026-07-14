@@ -41,4 +41,5 @@ navigationevent-compose = { module = "androidx.navigationevent:navigationevent-c
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

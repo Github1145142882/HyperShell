@@ -15,3 +15,7 @@ MiSans intellectual-property license, HyperShell downloads MiSans Regular direct
 from Xiaomi's official server and stores it only in the application's private data.
 MiSans and its name are the property of Xiaomi. The official download and license are
 available at https://hyperos.mi.com/font/zh/download/.
+
+HyperShell builds `terminal-view` from the pinned `termux/termux-app` source and carries
+a local `TerminalRenderer` modification for Android HDR text output. The upstream module
+and its Android Terminal Emulator portions retain their original GPLv3/Apache-2.0 notices.

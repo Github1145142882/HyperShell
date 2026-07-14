@@ -4,7 +4,9 @@ package io.github.hypershell.ui.kit.component
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,8 +18,11 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -41,10 +46,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.LayoutDirection
@@ -152,15 +159,10 @@ fun RowScope.FloatingBottomBarItem(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val scale = LocalFloatingBottomBarTabScale.current
-    Column(
+    val interaction = remember { MutableInteractionSource() }
+    Box(
         modifier
             .clip(CircleShape)
-            .clickable(
-                interactionSource = null,
-                indication = null,
-                role = Role.Tab,
-                onClick = onClick
-            )
             .fillMaxHeight()
             .weight(1f)
             .graphicsLayer {
@@ -168,10 +170,21 @@ fun RowScope.FloatingBottomBarItem(
                 scaleX = scale
                 scaleY = scale
             },
-        verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        content = content
-    )
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = interaction,
+                    indication = null,
+                    role = Role.Tab,
+                    onClick = onClick,
+                ),
+            verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            content = content,
+        )
+    }
 }
 
 @Composable
@@ -182,7 +195,8 @@ fun FloatingBottomBar(
     backdrop: Backdrop,
     tabsCount: Int,
     isBlurEnabled: Boolean = true,
-    content: @Composable RowScope.() -> Unit
+    hdrPulseEnabled: Boolean = false,
+    content: @Composable RowScope.(selectedIndex: Int, hdrIntensity: Float) -> Unit
 ) {
     val isInDark = isInDarkTheme()
     val pillShape = remember { CircleShape }
@@ -273,7 +287,14 @@ fun FloatingBottomBar(
             onSelected(index)
         }
     }
-
+    val selectedPressed by remember {
+        derivedStateOf { hdrPulseEnabled && dampedDragAnimation.pressProgress > 0.001f }
+    }
+    val selectedPulseIntensity by animateFloatAsState(
+        targetValue = if (selectedPressed) 1f else 0f,
+        animationSpec = tween(durationMillis = if (selectedPressed) 24 else 420),
+        label = "selectedTabHdrPulse",
+    )
     val interactiveHighlight = remember(animationScope, tabWidthPx) {
         InteractiveHighlight(
             animationScope = animationScope,
@@ -347,7 +368,7 @@ fun FloatingBottomBar(
                 .height(64.dp)
                 .padding(4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            content = content
+            content = { content(currentIndex, selectedPulseIntensity) }
         )
 
         if (isBlurEnabled) {
@@ -380,7 +401,7 @@ fun FloatingBottomBar(
                         .padding(horizontal = 4.dp)
                         .graphicsLayer(colorFilter = ColorFilter.tint(accentColor)),
                     verticalAlignment = Alignment.CenterVertically,
-                    content = content
+                    content = { content(currentIndex, selectedPulseIntensity) }
                 )
             }
         }
@@ -434,8 +455,22 @@ fun FloatingBottomBar(
                             )
                         }
                         .height(56.dp)
-                        .width(tabWidthDp)
-                )
+                        .width(tabWidthDp),
+                ) {
+                    if (hdrPulseEnabled) {
+                        AndroidView(
+                            factory = ::HdrPulseView,
+                            update = { view ->
+                                view.pulseColor = Color.White.toArgb()
+                                view.intensity = selectedPulseIntensity
+                            },
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .requiredWidth(tabWidthDp + 32.dp)
+                                .requiredHeight(64.dp),
+                        )
+                    }
+                }
             } else {
                 Box(
                     Modifier
@@ -449,10 +484,22 @@ fun FloatingBottomBar(
                         .background(accentColor.copy(alpha = 0.15f), pillShape)
                         .height(56.dp)
                         .width(tabWidthDp)
-                )
+                ) {
+                    if (hdrPulseEnabled) {
+                        AndroidView(
+                            factory = ::HdrPulseView,
+                            update = { view ->
+                                view.pulseColor = Color.White.toArgb()
+                                view.intensity = selectedPulseIntensity
+                            },
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .requiredWidth(tabWidthDp + 32.dp)
+                                .requiredHeight(64.dp),
+                        )
+                    }
+                }
             }
         }
     }
 }
-
-

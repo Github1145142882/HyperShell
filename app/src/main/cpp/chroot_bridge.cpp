@@ -114,6 +114,8 @@ Java_io_github_hypershell_terminal_ChrootNative_nativeEnter(
     setenv("SHELL", "/bin/bash", 1);
     setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 1);
     setenv("LANG", "C.UTF-8", 1);
-    execl("/bin/bash", "/bin/bash", "--login", static_cast<char*>(nullptr));
+    // Force interactive mode. Some KernelSU `su -c` implementations preserve the PTY file
+    // descriptors but Bash does not infer interactivity after the app_process hand-off.
+    execl("/bin/bash", "/bin/bash", "--login", "-i", static_cast<char*>(nullptr));
     return errno;
 }

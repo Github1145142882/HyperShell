@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.hypershell"
         minSdk = 26
         targetSdk = 28
-        versionCode = 6
-        versionName = "1.4.0"
+        versionCode = 22
+        versionName = "1.4.16"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
@@ -48,6 +48,7 @@ android {
     }
 
     packaging {
+        jniLibs.useLegacyPackaging = true
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
     }
 
@@ -90,7 +91,7 @@ dependencies {
     implementation(libs.navigation3.ui)
     implementation(libs.navigationevent.compose)
     implementation("com.github.termux.termux-app:terminal-emulator:$termuxVersion:release@aar")
-    implementation("com.github.termux.termux-app:terminal-view:$termuxVersion:release@aar")
+    implementation(project(":terminal-view-hdr"))
 
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit4)

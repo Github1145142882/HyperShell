@@ -137,7 +137,7 @@ class TermuxEnvironmentManager(
     }
 
     fun ubuntuCommand(backend: UbuntuBackend): List<String> = when (backend) {
-        UbuntuBackend.Chroot -> chrootProcessCommand("enter")
+        UbuntuBackend.Chroot -> chrootInteractiveCommand()
         UbuntuBackend.Proot -> ubuntuProotCommand()
     }
 
@@ -187,6 +187,36 @@ class TermuxEnvironmentManager(
         val command = "exec env CLASSPATH=${shellQuote(sourceApk)} /system/bin/app_process /system/bin " +
             "${shellQuote(className)} ${shellQuote(nativeLibrary.absolutePath)} ${shellQuote(action)} " +
             "${shellQuote(ubuntuRoot.absolutePath)} ${shellQuote(home.absolutePath)}"
+        return listOf("su", "-c", command)
+    }
+
+    /**
+     * Starts chroot without app_process/JNI in the PTY child chain. app_process closes or
+     * reconfigures the controlling terminal on some KernelSU builds, making an otherwise
+     * successful interactive bash receive EOF immediately. System unshare/chroot preserve the
+     * PTY descriptors created by Termux's TerminalSession.
+     */
+    private fun chrootInteractiveCommand(): List<String> {
+        val root = shellQuote(ubuntuRoot.absolutePath)
+        val hostHome = shellQuote(home.absolutePath)
+        val inner = """
+            set -e
+            busybox=''
+            for candidate in /data/adb/ksu/bin/busybox /data/adb/magisk/busybox; do
+                if [ -x "${'$'}candidate" ]; then busybox="${'$'}candidate"; break; fi
+            done
+            [ -n "${'$'}busybox" ] || { echo 'HyperShell chroot: root manager BusyBox not found' >&2; exit 127; }
+            "${'$'}busybox" mount --make-rprivate /
+            "${'$'}busybox" mount --rbind /dev $root/dev
+            "${'$'}busybox" mount -t proc proc $root/proc
+            "${'$'}busybox" mount --rbind /sys $root/sys
+            "${'$'}busybox" mount --bind $hostHome $root/root
+            exec /system/bin/chroot $root /usr/bin/env -i \
+                HOME=/root USER=root LOGNAME=root SHELL=/bin/bash TERM=xterm-256color \
+                LANG=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                /bin/bash --login -i
+        """.trimIndent()
+        val command = "exec /system/bin/unshare -m /system/bin/sh -c ${shellQuote(inner)}"
         return listOf("su", "-c", command)
     }
 
@@ -301,10 +331,19 @@ class TermuxEnvironmentManager(
     }
 
     private fun ensureOfflineRepository() {
-        val expected = appContext.assets.open("repository/VERSION").bufferedReader().use { it.readText().trim() }
+        val packagedVersion = appContext.assets.open("repository/VERSION").bufferedReader().use { it.readText().trim() }
+        val expected = "$packagedVersion-layout-$REPOSITORY_LAYOUT_VERSION"
         val marker = File(offlineRepository, "VERSION")
-        if (marker.isFile && marker.readText().trim() == expected) {
+        val installedVersion = marker.readTextOrNull()
+        if (installedVersion == expected) {
             configureAptSources()
+            return
+        }
+        if (offlineRepository.isDirectory && installedVersion == packagedVersion) {
+            migrateRepositoryFileNames(offlineRepository)
+            marker.writeText("$expected\n")
+            configureAptSources()
+            updateLocalAptIndexes()
             return
         }
         val staging = File(appContext.filesDir, "repository-staging")
@@ -313,8 +352,21 @@ class TermuxEnvironmentManager(
         copyAssetTree("repository", staging)
         offlineRepository.deleteRecursively()
         check(staging.renameTo(offlineRepository)) { "无法启用离线软件源" }
+        File(offlineRepository, "VERSION").writeText("$expected\n")
         configureAptSources()
         updateLocalAptIndexes()
+    }
+
+    private fun migrateRepositoryFileNames(repository: File) {
+        repository.walkBottomUp().forEach { current ->
+            val androidName = androidRepositoryFileName(current.name)
+            if (androidName != current.name) {
+                val target = File(current.parentFile, androidName)
+                check(!target.exists() && current.renameTo(target)) {
+                    "无法迁移软件源文件：${current.name}"
+                }
+            }
+        }
     }
 
     private fun copyAssetTree(assetPath: String, target: File) {
@@ -325,7 +377,13 @@ class TermuxEnvironmentManager(
             return
         }
         check(target.mkdirs() || target.isDirectory) { "无法创建 ${target.name}" }
-        children.forEach { child -> copyAssetTree("$assetPath/$child", File(target, child)) }
+        children.forEach { child ->
+            // Windows cannot store ':' in filenames. The repository staging scripts encode it
+            // as U+F03A, while the Debian Packages index correctly retains ':'. Restore the real
+            // filename when copying into Android's private filesystem, which supports colons.
+            val androidName = androidRepositoryFileName(child)
+            copyAssetTree("$assetPath/$child", File(target, androidName))
+        }
     }
 
     private fun configureAptSources() {
@@ -415,17 +473,71 @@ class TermuxEnvironmentManager(
     private fun configureUbuntuRoot(root: File) {
         File(root, "etc/resolv.conf").apply {
             parentFile?.mkdirs()
-            writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+            writeText(
+                "nameserver 223.5.5.5\n" +
+                    "nameserver 119.29.29.29\n" +
+                    "nameserver 1.1.1.1\n",
+            )
+        }
+        File(root, "etc/apt/mirrors.txt").apply {
+            parentFile?.mkdirs()
+            writeText(
+                "https://mirrors.ustc.edu.cn/ubuntu-ports/\n" +
+                    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/\n" +
+                    "https://mirrors.aliyun.com/ubuntu-ports/\n" +
+                    "https://ports.ubuntu.com/ubuntu-ports/\n",
+            )
+        }
+        File(root, "etc/apt/mirrors-bootstrap.txt").apply {
+            parentFile?.mkdirs()
+            // Ubuntu Base deliberately omits ca-certificates. These HTTP endpoints are used only
+            // to install that package; APT still authenticates Release metadata and every package
+            // with the Ubuntu archive keyring before accepting it.
+            writeText(
+                "http://mirrors.ustc.edu.cn/ubuntu-ports/\n" +
+                    "http://mirrors.aliyun.com/ubuntu-ports/\n" +
+                    "http://ports.ubuntu.com/ubuntu-ports/\n",
+            )
+        }
+        File(root, "etc/apt/sources.bootstrap.list").apply {
+            parentFile?.mkdirs()
+            val source = "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] " +
+                "mirror+file:/etc/apt/mirrors-bootstrap.txt"
+            val components = "main restricted universe multiverse"
+            writeText(
+                "$source noble $components\n" +
+                    "$source noble-updates $components\n" +
+                    "$source noble-security $components\n" +
+                    "$source noble-backports $components\n",
+            )
         }
         File(root, "etc/apt/sources.list").apply {
             parentFile?.mkdirs()
+            val source = "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] " +
+                "mirror+file:/etc/apt/mirrors.txt"
+            val components = "main restricted universe multiverse"
             writeText(
-                "deb http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse\n" +
-                    "deb http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse\n" +
-                    "deb http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse\n" +
-                    "deb http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse\n",
+                "$source noble $components\n" +
+                    "$source noble-updates $components\n" +
+                    "$source noble-security $components\n" +
+                    "$source noble-backports $components\n",
             )
         }
+        File(root, "etc/apt/sources.list.d").apply {
+            mkdirs()
+            listFiles()?.forEach { if (it.isFile) it.delete() }
+        }
+        File(root, "etc/apt/apt.conf.d/99hypershell-network").apply {
+            parentFile?.mkdirs()
+            writeText(
+                "Acquire::Retries \"3\";\n" +
+                    "Acquire::ForceIPv4 \"true\";\n" +
+                    "Acquire::http::Timeout \"25\";\n" +
+                    "Acquire::https::Timeout \"25\";\n",
+            )
+        }
+        installUbuntuAptWrapper(root, "apt")
+        installUbuntuAptWrapper(root, "apt-get")
         File(root, "usr/local/bin/pkg").apply {
             parentFile?.mkdirs()
             writeText(
@@ -434,7 +546,7 @@ set -e
 command=${'$'}{1:-help}
 [[ ${'$'}# -gt 0 ]] && shift
 ensure_indexes() {
-  find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q . || /usr/bin/apt update
+  find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q . || /usr/local/sbin/apt update
 }
 case "${'$'}command" in
   install|in)
@@ -447,15 +559,15 @@ case "${'$'}command" in
         mapped+=("${'$'}argument")
       fi
     done
-    exec /usr/bin/apt install "${'$'}{mapped[@]}"
+    exec /usr/local/sbin/apt install "${'$'}{mapped[@]}"
     ;;
-  update|up) exec /usr/bin/apt update ;;
-  upgrade) /usr/bin/apt update && exec /usr/bin/apt full-upgrade "${'$'}@" ;;
-  remove|uninstall) exec /usr/bin/apt remove "${'$'}@" ;;
-  search) exec /usr/bin/apt search "${'$'}@" ;;
-  show) exec /usr/bin/apt show "${'$'}@" ;;
-  list-all) exec /usr/bin/apt list ;;
-  clean) exec /usr/bin/apt clean ;;
+  update|up) exec /usr/local/sbin/apt update ;;
+  upgrade) /usr/local/sbin/apt update && exec /usr/local/sbin/apt full-upgrade "${'$'}@" ;;
+  remove|uninstall) exec /usr/local/sbin/apt remove "${'$'}@" ;;
+  search) exec /usr/local/sbin/apt search "${'$'}@" ;;
+  show) exec /usr/local/sbin/apt show "${'$'}@" ;;
+  list-all) exec /usr/local/sbin/apt list ;;
+  clean) exec /usr/local/sbin/apt clean ;;
   *)
     printf '%s\n' 'HyperShell pkg (Ubuntu APT backend)' \
       'pkg install <package>' 'pkg update' 'pkg upgrade' \
@@ -473,12 +585,47 @@ esac
         }
     }
 
+    private fun installUbuntuAptWrapper(root: File, command: String) {
+        File(root, "usr/local/sbin/$command").apply {
+            parentFile?.mkdirs()
+            writeText(
+                """#!/bin/sh
+set -e
+real=/usr/bin/$command
+bootstrap_ca_certificates() {
+  [ -s /etc/ssl/certs/ca-certificates.crt ] && return 0
+  printf '%s\n' 'HyperShell: first-run certificate bootstrap...'
+  install -d -o _apt -g root -m 700 /var/lib/apt/lists/partial /var/cache/apt/archives/partial 2>/dev/null || {
+    mkdir -p /var/lib/apt/lists/partial /var/cache/apt/archives/partial
+    chmod 700 /var/lib/apt/lists/partial /var/cache/apt/archives/partial
+  }
+  bootstrap_options='-o Dir::Etc::sourcelist=/etc/apt/sources.bootstrap.list -o Dir::Etc::sourceparts=-'
+  /usr/bin/apt-get ${'$'}bootstrap_options update
+  DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get ${'$'}bootstrap_options install -y ca-certificates
+  update-ca-certificates >/dev/null 2>&1 || true
+  /usr/bin/apt-get update
+}
+case "${'$'}{1:-}" in
+  update|install|upgrade|full-upgrade|dist-upgrade)
+    bootstrap_ca_certificates
+    if ! find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q .; then
+      /usr/bin/apt-get update
+    fi
+    ;;
+esac
+exec "${'$'}real" "${'$'}@"
+""",
+            )
+            Os.chmod(absolutePath, 0b111_101_101)
+        }
+    }
+
     private fun updateUbuntuAptIndexesIfNeeded() {
         val lists = File(ubuntuRoot, "var/lib/apt/lists")
         val hasIndexes = lists.listFiles().orEmpty().any { it.isFile && it.length() > 0L }
         if (hasIndexes) return
         val command = ubuntuProotCommand().dropLast(2) + listOf(
-            "/usr/bin/apt-get",
+            "/usr/local/sbin/apt-get",
             "-o", "Acquire::Retries=1",
             "-o", "Acquire::http::Timeout=15",
             "update",
@@ -585,6 +732,7 @@ esac
         const val MARKER = ".hypershell-bootstrap-version"
         const val UBUNTU_MARKER = ".hypershell-ubuntu-version"
         const val PACMAN_DB_VERSION = "9"
+        const val REPOSITORY_LAYOUT_VERSION = 2
         const val CHROOT_PROBE_TIMEOUT_SECONDS = 20L
         const val REMOTE_REPOSITORY =
             "https://raw.githubusercontent.com/Github1145142882/HyperShell/gh-pages/"
@@ -602,3 +750,5 @@ internal fun localAptUpdateCommand(aptGet: File, localSource: File): List<String
     "-o", "APT::Get::List-Cleanup=0",
     "update",
 )
+
+internal fun androidRepositoryFileName(assetName: String): String = assetName.replace('\uF03A', ':')

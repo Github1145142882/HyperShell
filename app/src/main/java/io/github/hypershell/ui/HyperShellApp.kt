@@ -4,6 +4,7 @@ import android.content.Intent
 import android.app.WallpaperManager
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -19,15 +20,19 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -50,6 +55,7 @@ import io.github.hypershell.HyperShellUiState
 import io.github.hypershell.HyperShellViewModel
 import io.github.hypershell.settings.AppSettings
 import io.github.hypershell.settings.colorSchemeMode
+import io.github.hypershell.terminal.TerminalHdrController
 import io.github.hypershell.ui.kit.component.FloatingBottomBar
 import io.github.hypershell.ui.kit.component.FloatingBottomBarItem
 import io.github.hypershell.ui.kit.component.MainPagerState
@@ -191,6 +197,34 @@ private fun MainShell(
         viewModel.selectPage(listOf(AppPage.Files, AppPage.Terminal, AppPage.Settings)[pager.settledPage])
     }
     LaunchedEffect(pager.currentPage) { mainState.syncPage() }
+    val activity = LocalActivity.current
+    LaunchedEffect(
+        activity,
+        state.settings.terminalHdrHighlight,
+        state.settings.floatingBottomBarGlass,
+        mainState.selectedPage,
+        pager.settledPage,
+    ) {
+        activity ?: return@LaunchedEffect
+        // Use the real pager position, not the asynchronously mirrored ViewModel page.
+        // Requiring both values also disables HDR for the whole duration of a page transition.
+        val terminalPageHdr = mainState.selectedPage == 1 && pager.settledPage == 1
+        // The local F16/scRGB navigation surface still needs an HDR-capable parent window.
+        // Keep that capability across all three pages, but only feed extended-range glyphs to
+        // the renderer while the terminal page is settled. Ordinary Compose top bars remain SDR.
+        val windowHdrEnabled = state.settings.terminalHdrHighlight &&
+            (terminalPageHdr || state.settings.floatingBottomBarGlass)
+        TerminalHdrController.apply(
+            activity = activity,
+            enabled = windowHdrEnabled,
+            terminalTextEnabled = terminalPageHdr,
+        ).onFailure { error ->
+            if (windowHdrEnabled) viewModel.reportHdrUnavailable(error.message ?: "当前设备无法输出真 HDR")
+        }
+    }
+    DisposableEffect(activity) {
+        onDispose { activity?.let { TerminalHdrController.apply(it, false) } }
+    }
     MainPagerBackHandler(mainState)
 
     CompositionLocalProvider(LocalMainPagerState provides mainState) {
@@ -269,13 +303,27 @@ private fun ShellBottomBar(
             backdrop = glassBackdrop,
             tabsCount = items.size,
             isBlurEnabled = state.settings.floatingBottomBarGlass && state.settings.bottomBarBlur,
-        ) {
+            hdrPulseEnabled = state.settings.terminalHdrHighlight && state.settings.floatingBottomBarGlass,
+        ) { selectedIndex, hdrIntensity ->
             items.forEachIndexed { index, item ->
+                val baseColor = MiuixTheme.colorScheme.onSurface
+                val itemColor = if (index == selectedIndex && hdrIntensity > 0.001f) {
+                    val linearBase = baseColor.convert(ColorSpaces.LinearExtendedSrgb)
+                    Color(
+                        red = linearBase.red + (4f - linearBase.red) * hdrIntensity,
+                        green = linearBase.green + (4f - linearBase.green) * hdrIntensity,
+                        blue = linearBase.blue + (4f - linearBase.blue) * hdrIntensity,
+                        alpha = linearBase.alpha,
+                        colorSpace = ColorSpaces.LinearExtendedSrgb,
+                    )
+                } else {
+                    baseColor
+                }
                 FloatingBottomBarItem(
                     onClick = { mainState.animateToPage(index) },
                     modifier = Modifier.defaultMinSize(minWidth = 76.dp),
                 ) {
-                    Icon(item.first, contentDescription = item.second, tint = MiuixTheme.colorScheme.onSurface)
+                    Icon(item.first, contentDescription = item.second, tint = itemColor)
                     Text(
                         item.second,
                         fontSize = 11.sp,
@@ -283,7 +331,7 @@ private fun ShellBottomBar(
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Visible,
-                        color = MiuixTheme.colorScheme.onSurface,
+                        color = itemColor,
                     )
                 }
             }

@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "HyperShell"
 include(":app")
+include(":terminal-view-hdr")

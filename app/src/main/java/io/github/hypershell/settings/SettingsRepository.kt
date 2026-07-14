@@ -45,7 +45,7 @@ class SettingsRepository(private val context: Context) {
         terminalBackgroundImagePath = p[Keys.terminalBackgroundImagePath],
         terminalBackgroundDim = (p[Keys.terminalBackgroundDim] ?: 0.35f).coerceIn(0f, 0.8f),
         terminalBackgroundBlur = (p[Keys.terminalBackgroundBlur] ?: 0f).coerceIn(0f, 32f),
-        terminalHdrHighlight = p[Keys.terminalHdrHighlight] ?: false,
+        terminalHdrHighlight = p[Keys.terminalHdrHighlight] ?: true,
         terminalFont = decodeTerminalFont(p[Keys.terminalFont]),
         customTerminalFontPath = p[Keys.customTerminalFontPath],
         bookmarks = p[Keys.bookmarks] ?: emptySet(),

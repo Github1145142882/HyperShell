@@ -65,6 +65,7 @@ sealed interface Confirmation {
     data class SaveFile(val path: String) : Confirmation
     data class ExtractZip(val name: String, val destination: String) : Confirmation
     data class UbuntuProotFallback(val reason: String) : Confirmation
+    data class DisableUnsupportedHdr(val reason: String) : Confirmation
 }
 
 data class FileActionState(
@@ -159,7 +160,6 @@ class HyperShellViewModel @JvmOverloads constructor(
                     settings.terminalFont,
                     settings.customTerminalFontPath,
                     settings.terminalBackgroundImagePath != null,
-                    settings.terminalHdrHighlight,
                 )
             }
         }
@@ -248,7 +248,6 @@ class HyperShellViewModel @JvmOverloads constructor(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
-        hdrHighlight: Boolean,
     ): Boolean {
         val termuxSession = terminalSession as? TermuxTerminalSession ?: return false
         termuxSession.attachView(
@@ -258,7 +257,6 @@ class HyperShellViewModel @JvmOverloads constructor(
             terminalFont,
             customFontPath,
             transparentBackground,
-            hdrHighlight,
         ) { size -> updateSettings { it.copy(terminalFontSize = size.coerceIn(9f, 28f)) } }
         return true
     }
@@ -276,14 +274,12 @@ class HyperShellViewModel @JvmOverloads constructor(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
-        hdrHighlight: Boolean,
     ) {
         (terminalSession as? TermuxTerminalSession)?.updateAppearance(
             backgroundColor,
             terminalFont,
             customFontPath,
             transparentBackground,
-            hdrHighlight,
         )
     }
 
@@ -365,7 +361,18 @@ class HyperShellViewModel @JvmOverloads constructor(
                 dismissConfirmation()
                 startUbuntuProotFallback()
             }
+            is Confirmation.DisableUnsupportedHdr -> {
+                dismissConfirmation()
+                updateSettings { it.copy(terminalHdrHighlight = false) }
+            }
             null -> Unit
+        }
+    }
+
+    fun reportHdrUnavailable(reason: String) {
+        _uiState.update { state ->
+            if (!state.settings.terminalHdrHighlight || state.confirmation is Confirmation.DisableUnsupportedHdr) state
+            else state.copy(confirmation = Confirmation.DisableUnsupportedHdr(reason))
         }
     }
 

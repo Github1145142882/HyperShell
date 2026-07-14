@@ -18,6 +18,7 @@ import io.github.hypershell.settings.AppSettings
 import io.github.hypershell.settings.OfficialFontInstaller
 import io.github.hypershell.settings.SettingsRepository
 import io.github.hypershell.terminal.TerminalTypefaceResolver
+import io.github.hypershell.terminal.TerminalHdrController
 import io.github.hypershell.ui.AppearancePage
 import io.github.hypershell.ui.HyperShellTheme
 import kotlinx.coroutines.flow.SharingStarted
@@ -55,6 +56,13 @@ class AppearanceActivity : ComponentActivity() {
                     removeMiSans = viewModel::removeMiSans,
                     importBackground = { backgroundPicker.launch(arrayOf("image/*")) },
                     removeBackground = viewModel::removeTerminalBackground,
+                    onTerminalHdrChanged = { enabled ->
+                        if (!enabled || TerminalHdrController.isSupported(this@AppearanceActivity)) {
+                            viewModel.update { it.copy(terminalHdrHighlight = enabled) }
+                        } else {
+                            viewModel.reportError(TerminalHdrController.unsupportedReason(this@AppearanceActivity))
+                        }
+                    },
                     openMiSansLicense = {
                         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(OfficialFontInstaller.LICENSE_URL)))
                     },
@@ -174,6 +182,8 @@ internal class AppearanceSettingsViewModel(application: Application) : AndroidVi
     }
 
     fun dismissError() { _error.value = null }
+
+    fun reportError(message: String) { _error.value = message }
 
     private companion object {
         const val MAX_FONT_BYTES = 16L * 1024L * 1024L

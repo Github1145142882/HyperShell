@@ -407,7 +407,6 @@ fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPaddin
                 backgroundBlur = state.settings.terminalBackgroundBlur,
                 terminalFont = state.settings.terminalFont,
                 customFontPath = state.settings.customTerminalFontPath,
-                hdrHighlight = state.settings.terminalHdrHighlight,
                 contentTopInset = scaffoldPadding.calculateTopPadding() + 12.dp,
                 modifier = Modifier
                     .fillMaxSize()
@@ -438,7 +437,6 @@ private fun TermuxTerminalCanvas(
     backgroundBlur: Float,
     terminalFont: TerminalFont,
     customFontPath: String?,
-    hdrHighlight: Boolean,
     contentTopInset: Dp,
     modifier: Modifier,
 ) {
@@ -447,8 +445,8 @@ private fun TermuxTerminalCanvas(
     var terminalView by remember { mutableStateOf<TerminalView?>(null) }
     LaunchedEffect(textSizePx) { vm.updateTerminalViewTextSize(textSizePx) }
     val hasBackgroundImage = backgroundImagePath?.let(::JavaFile)?.isFile == true
-    LaunchedEffect(backgroundColor, terminalFont, customFontPath, hasBackgroundImage, hdrHighlight) {
-        vm.updateTerminalAppearance(backgroundColor, terminalFont, customFontPath, hasBackgroundImage, hdrHighlight)
+    LaunchedEffect(backgroundColor, terminalFont, customFontPath, hasBackgroundImage) {
+        vm.updateTerminalAppearance(backgroundColor, terminalFont, customFontPath, hasBackgroundImage)
     }
     DisposableEffect(vm) {
         onDispose { terminalView?.let(vm::detachTerminalView) }
@@ -511,7 +509,6 @@ private fun TermuxTerminalCanvas(
                             terminalFont,
                             customFontPath,
                             hasBackgroundImage,
-                            hdrHighlight,
                         )
                     }
                 },
@@ -523,7 +520,6 @@ private fun TermuxTerminalCanvas(
                         terminalFont,
                         customFontPath,
                         hasBackgroundImage,
-                        hdrHighlight,
                     )
                 },
                 modifier = Modifier
@@ -754,6 +750,7 @@ fun AppearancePage(
     removeMiSans: () -> Unit,
     importBackground: () -> Unit,
     removeBackground: () -> Unit,
+    onTerminalHdrChanged: (Boolean) -> Unit,
     openMiSansLicense: () -> Unit,
     dismissError: () -> Unit,
     back: () -> Unit,
@@ -857,9 +854,9 @@ fun AppearancePage(
                     )
                     SwitchPreference(
                         settings.terminalHdrHighlight,
-                        { value -> updateSettings { it.copy(terminalHdrHighlight = value) } },
+                        onTerminalHdrChanged,
                         "终端 HDR 高亮",
-                        summary = "增强 ANSI 亮色与对比度，不模糊字形",
+                        summary = "HDR 窗口与扩展线性亮度字形；需要 HDR 屏幕",
                     )
                     SliderPreference(
                         settings.terminalBackgroundBlur,
@@ -1099,6 +1096,7 @@ fun ShellConfirmation(state: HyperShellUiState, vm: HyperShellViewModel) {
             is Confirmation.SaveFile -> "确认 Root 写入"
             is Confirmation.ExtractZip -> "确认解压"
             is Confirmation.UbuntuProotFallback -> "切换到 proot 兼容模式？"
+            is Confirmation.DisableUnsupportedHdr -> "终端真 HDR 不可用"
             null -> "确认"
         },
         summary = when (confirmation) {
@@ -1106,13 +1104,21 @@ fun ShellConfirmation(state: HyperShellUiState, vm: HyperShellViewModel) {
             is Confirmation.ExtractZip -> "${confirmation.name}\n→ ${confirmation.destination}"
             is Confirmation.UbuntuProotFallback ->
                 "Root chroot 启动条件不满足：\n${confirmation.reason}\n\nproot 性能较低，但无需挂载权限。本次只有确认后才会回退。"
+            is Confirmation.DisableUnsupportedHdr ->
+                "${confirmation.reason}\n\n未启用调色板模拟。是否关闭终端 HDR 设置？"
             null -> ""
         },
         content = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = vm::dismissConfirmation, modifier = Modifier.weight(1f)) { Text("取消") }
                 Button(onClick = vm::confirmAction, modifier = Modifier.weight(1f)) {
-                    Text(if (confirmation is Confirmation.UbuntuProotFallback) "使用 proot" else "继续")
+                    Text(
+                        when (confirmation) {
+                            is Confirmation.UbuntuProotFallback -> "使用 proot"
+                            is Confirmation.DisableUnsupportedHdr -> "关闭 HDR"
+                            else -> "继续"
+                        },
+                    )
                 }
             }
         },
