@@ -56,6 +56,13 @@ jobs:
               -exec cp -f {} "$HYPERSHELL_LINUX_BUILD_ROOT/termux-packages/output/" \;
           fi
 
+      - name: Prepare writable Termux host data root
+        if: github.event_name == 'push' || inputs.packages != ''
+        shell: bash
+        run: |
+          sudo mkdir -p /data
+          sudo chown -R "$(id -u):$(id -g)" /data
+
       - name: Build requested packages
         shell: bash
         env:
