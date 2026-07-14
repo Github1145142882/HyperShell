@@ -15,7 +15,7 @@ if [[ $EUID -eq 0 ]]; then
     -e 's/python3\.14-venv/python3-venv/g' \
     -e 's#apt\.llvm\.org/resolute#apt.llvm.org/noble#g' \
     -e 's/llvm-toolchain-resolute-/llvm-toolchain-noble-/g' \
-    -e 's/coreutils-from-uutils/coreutils/g' \
+    -e 's/coreutils-from-uutils//g' \
     "$scripts_dir/setup-ubuntu.sh" > "$compat_script"
   bash "$compat_script"
   echo "Ubuntu system dependencies are ready."
