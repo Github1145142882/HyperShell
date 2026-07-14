@@ -19,11 +19,31 @@ import sys
 repo = pathlib.Path(sys.argv[1]).resolve()
 release = (repo / "dists/stable/Release").read_text(encoding="utf-8")
 referenced = set()
+release_hashes = {}
+in_sha256 = False
+for line in release.splitlines():
+    if line == "SHA256:":
+        in_sha256 = True
+        continue
+    if in_sha256 and not line.startswith(" "):
+        break
+    if in_sha256:
+        digest, size, path = line.split()
+        release_hashes[path] = (digest, int(size))
 
 for packages_gz in sorted((repo / "dists/stable/main").glob("binary-*/Packages.gz")):
-    relative_gz = packages_gz.relative_to(repo).as_posix()
-    if relative_gz not in release:
+    relative_gz = packages_gz.relative_to(repo / "dists/stable").as_posix()
+    expected = release_hashes.get(relative_gz)
+    data_gz = packages_gz.read_bytes()
+    if expected is None:
         raise SystemExit(f"Release does not reference {relative_gz}")
+    if expected != (hashlib.sha256(data_gz).hexdigest(), len(data_gz)):
+        raise SystemExit(f"Release hash mismatch: {relative_gz}")
+    packages = packages_gz.with_suffix("")
+    relative_packages = packages.relative_to(repo / "dists/stable").as_posix()
+    data_packages = packages.read_bytes()
+    if release_hashes.get(relative_packages) != (hashlib.sha256(data_packages).hexdigest(), len(data_packages)):
+        raise SystemExit(f"Release hash mismatch: {relative_packages}")
     with gzip.open(packages_gz, "rt", encoding="utf-8") as stream:
         paragraphs = stream.read().strip().split("\n\n")
     for paragraph in filter(None, paragraphs):
