@@ -8,8 +8,12 @@ if [[ $EUID -eq 0 ]]; then
   # The pinned Termux checkout currently names python3.14-venv, while Ubuntu
   # 24.04 runners provide the distribution-supported python3-venv package.
   # Feed a compatibility-adjusted copy to bash without modifying the submodule.
+  scripts_dir="$ROOT/third_party/termux-packages/scripts"
+  compat_script=$(mktemp "$scripts_dir/setup-ubuntu-hypershell.XXXXXX")
+  trap 'rm -f "$compat_script"' EXIT
   sed 's/python3\.14-venv/python3-venv/g' \
-    "$ROOT/third_party/termux-packages/scripts/setup-ubuntu.sh" | bash
+    "$scripts_dir/setup-ubuntu.sh" > "$compat_script"
+  bash "$compat_script"
   echo "Ubuntu system dependencies are ready."
   exit 0
 fi
