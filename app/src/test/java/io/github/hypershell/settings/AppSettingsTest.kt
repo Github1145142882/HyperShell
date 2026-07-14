@@ -20,6 +20,7 @@ class AppSettingsTest {
         assertEquals(EditorLimit.MiB4, settings.editorLimit)
         assertEquals(0.35f, settings.terminalBackgroundDim)
         assertEquals(0f, settings.terminalBackgroundBlur)
+        assertEquals(false, settings.terminalHdrHighlight)
     }
 
     @Test

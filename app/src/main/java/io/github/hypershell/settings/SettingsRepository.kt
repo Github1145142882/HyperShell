@@ -45,6 +45,7 @@ class SettingsRepository(private val context: Context) {
         terminalBackgroundImagePath = p[Keys.terminalBackgroundImagePath],
         terminalBackgroundDim = (p[Keys.terminalBackgroundDim] ?: 0.35f).coerceIn(0f, 0.8f),
         terminalBackgroundBlur = (p[Keys.terminalBackgroundBlur] ?: 0f).coerceIn(0f, 32f),
+        terminalHdrHighlight = p[Keys.terminalHdrHighlight] ?: false,
         terminalFont = decodeTerminalFont(p[Keys.terminalFont]),
         customTerminalFontPath = p[Keys.customTerminalFontPath],
         bookmarks = p[Keys.bookmarks] ?: emptySet(),
@@ -75,6 +76,7 @@ class SettingsRepository(private val context: Context) {
             ?: p.remove(Keys.terminalBackgroundImagePath)
         p[Keys.terminalBackgroundDim] = s.terminalBackgroundDim.coerceIn(0f, 0.8f)
         p[Keys.terminalBackgroundBlur] = s.terminalBackgroundBlur.coerceIn(0f, 32f)
+        p[Keys.terminalHdrHighlight] = s.terminalHdrHighlight
         p[Keys.terminalFont] = s.terminalFont.name
         s.customTerminalFontPath?.let { p[Keys.customTerminalFontPath] = it }
             ?: p.remove(Keys.customTerminalFontPath)
@@ -108,6 +110,7 @@ class SettingsRepository(private val context: Context) {
         val terminalBackgroundImagePath = stringPreferencesKey("terminal_background_image_path")
         val terminalBackgroundDim = floatPreferencesKey("terminal_background_dim")
         val terminalBackgroundBlur = floatPreferencesKey("terminal_background_blur")
+        val terminalHdrHighlight = booleanPreferencesKey("terminal_hdr_highlight")
         val terminalFont = stringPreferencesKey("terminal_font")
         val customTerminalFontPath = stringPreferencesKey("custom_terminal_font_path")
         val bookmarks = stringSetPreferencesKey("bookmarks")

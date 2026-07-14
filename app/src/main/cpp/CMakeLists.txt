@@ -4,3 +4,5 @@ project(hypershell_pty LANGUAGES C CXX)
 add_library(hypershell_pty SHARED pty_bridge.cpp)
 target_link_libraries(hypershell_pty PRIVATE log)
 
+add_library(hypershell_chroot SHARED chroot_bridge.cpp)
+target_link_libraries(hypershell_chroot PRIVATE log)

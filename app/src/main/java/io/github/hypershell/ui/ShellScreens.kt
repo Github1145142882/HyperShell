@@ -84,6 +84,7 @@ import io.github.hypershell.terminal.TerminalRuntime
 import io.github.hypershell.terminal.TerminalStatus
 import io.github.hypershell.terminal.TerminalTypefaceResolver
 import io.github.hypershell.terminal.TermuxEnvironmentStatus
+import io.github.hypershell.terminal.UbuntuBackend
 import io.github.hypershell.ui.kit.util.BlurredBar
 import io.github.hypershell.ui.kit.util.rememberBlurBackdrop
 import top.yukonga.miuix.kmp.basic.BasicComponent
@@ -362,7 +363,12 @@ fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPaddin
     }
     KitPage(
         title = "终端",
-        subtitle = terminalSubtitle(state.terminalStatus, state.termuxEnvironmentStatus, state.terminalRuntime),
+        subtitle = terminalSubtitle(
+            state.terminalStatus,
+            state.termuxEnvironmentStatus,
+            state.terminalRuntime,
+            state.ubuntuBackend,
+        ),
         blur = state.settings.terminalTopBlur,
         bottomPadding = bottomPadding,
         compact = true,
@@ -401,6 +407,7 @@ fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPaddin
                 backgroundBlur = state.settings.terminalBackgroundBlur,
                 terminalFont = state.settings.terminalFont,
                 customFontPath = state.settings.customTerminalFontPath,
+                hdrHighlight = state.settings.terminalHdrHighlight,
                 contentTopInset = scaffoldPadding.calculateTopPadding() + 12.dp,
                 modifier = Modifier
                     .fillMaxSize()
@@ -431,6 +438,7 @@ private fun TermuxTerminalCanvas(
     backgroundBlur: Float,
     terminalFont: TerminalFont,
     customFontPath: String?,
+    hdrHighlight: Boolean,
     contentTopInset: Dp,
     modifier: Modifier,
 ) {
@@ -439,8 +447,8 @@ private fun TermuxTerminalCanvas(
     var terminalView by remember { mutableStateOf<TerminalView?>(null) }
     LaunchedEffect(textSizePx) { vm.updateTerminalViewTextSize(textSizePx) }
     val hasBackgroundImage = backgroundImagePath?.let(::JavaFile)?.isFile == true
-    LaunchedEffect(backgroundColor, terminalFont, customFontPath, hasBackgroundImage) {
-        vm.updateTerminalAppearance(backgroundColor, terminalFont, customFontPath, hasBackgroundImage)
+    LaunchedEffect(backgroundColor, terminalFont, customFontPath, hasBackgroundImage, hdrHighlight) {
+        vm.updateTerminalAppearance(backgroundColor, terminalFont, customFontPath, hasBackgroundImage, hdrHighlight)
     }
     DisposableEffect(vm) {
         onDispose { terminalView?.let(vm::detachTerminalView) }
@@ -503,6 +511,7 @@ private fun TermuxTerminalCanvas(
                             terminalFont,
                             customFontPath,
                             hasBackgroundImage,
+                            hdrHighlight,
                         )
                     }
                 },
@@ -514,6 +523,7 @@ private fun TermuxTerminalCanvas(
                         terminalFont,
                         customFontPath,
                         hasBackgroundImage,
+                        hdrHighlight,
                     )
                 },
                 modifier = Modifier
@@ -644,21 +654,24 @@ private fun terminalSubtitle(
     status: TerminalStatus,
     environment: TermuxEnvironmentStatus,
     runtime: TerminalRuntime,
+    ubuntuBackend: UbuntuBackend,
 ): String = when (environment) {
     TermuxEnvironmentStatus.Checking -> "正在检查 Termux 环境"
     TermuxEnvironmentStatus.Installing -> "正在安装 Termux bootstrap"
     is TermuxEnvironmentStatus.Failed -> "Termux 环境不可用"
     is TermuxEnvironmentStatus.Ready -> when (status) {
-        TerminalStatus.Idle -> "${runtime.displayName} · Bash 已就绪"
-        TerminalStatus.Starting -> "正在启动 ${runtime.displayName}"
-        is TerminalStatus.Running -> "${runtime.displayName} · PID ${status.pid}"
+        TerminalStatus.Idle -> "${runtime.displayName(ubuntuBackend)} · Bash 已就绪"
+        TerminalStatus.Starting -> "正在启动 ${runtime.displayName(ubuntuBackend)}"
+        is TerminalStatus.Running -> "${runtime.displayName(ubuntuBackend)} · PID ${status.pid}"
         is TerminalStatus.Exited -> "已退出 · ${status.exitCode}"
         is TerminalStatus.Failed -> "启动失败"
     }
 }
 
-private val TerminalRuntime.displayName: String
-    get() = if (this == TerminalRuntime.Termux) "Termux" else "Ubuntu"
+private fun TerminalRuntime.displayName(backend: UbuntuBackend): String = when (this) {
+    TerminalRuntime.Termux -> "Termux"
+    TerminalRuntime.Ubuntu -> if (backend == UbuntuBackend.Chroot) "Ubuntu chroot" else "Ubuntu proot"
+}
 
 @Composable
 private fun TerminalKeys(
@@ -841,6 +854,12 @@ fun AppearancePage(
                         valueRange = 0f..0.8f,
                         steps = 15,
                         enabled = settings.terminalBackgroundImagePath != null,
+                    )
+                    SwitchPreference(
+                        settings.terminalHdrHighlight,
+                        { value -> updateSettings { it.copy(terminalHdrHighlight = value) } },
+                        "终端 HDR 高亮",
+                        summary = "增强 ANSI 亮色与对比度，不模糊字形",
                     )
                     SliderPreference(
                         settings.terminalBackgroundBlur,
@@ -1079,17 +1098,22 @@ fun ShellConfirmation(state: HyperShellUiState, vm: HyperShellViewModel) {
         title = when (confirmation) {
             is Confirmation.SaveFile -> "确认 Root 写入"
             is Confirmation.ExtractZip -> "确认解压"
+            is Confirmation.UbuntuProotFallback -> "切换到 proot 兼容模式？"
             null -> "确认"
         },
         summary = when (confirmation) {
             is Confirmation.SaveFile -> confirmation.path
             is Confirmation.ExtractZip -> "${confirmation.name}\n→ ${confirmation.destination}"
+            is Confirmation.UbuntuProotFallback ->
+                "Root chroot 启动条件不满足：\n${confirmation.reason}\n\nproot 性能较低，但无需挂载权限。本次只有确认后才会回退。"
             null -> ""
         },
         content = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = vm::dismissConfirmation, modifier = Modifier.weight(1f)) { Text("取消") }
-                Button(onClick = vm::confirmAction, modifier = Modifier.weight(1f)) { Text("继续") }
+                Button(onClick = vm::confirmAction, modifier = Modifier.weight(1f)) {
+                    Text(if (confirmation is Confirmation.UbuntuProotFallback) "使用 proot" else "继续")
+                }
             }
         },
     )

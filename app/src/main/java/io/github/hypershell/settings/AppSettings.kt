@@ -45,6 +45,7 @@ data class AppSettings(
     val terminalBackgroundImagePath: String? = null,
     val terminalBackgroundDim: Float = 0.35f,
     val terminalBackgroundBlur: Float = 0f,
+    val terminalHdrHighlight: Boolean = false,
     val terminalFont: TerminalFont = TerminalFont.SystemMono,
     val customTerminalFontPath: String? = null,
     val bookmarks: Set<String> = emptySet(),

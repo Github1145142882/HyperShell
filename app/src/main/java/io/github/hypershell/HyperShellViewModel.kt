@@ -33,6 +33,7 @@ import io.github.hypershell.terminal.TerminalEvent
 import io.github.hypershell.terminal.TerminalLaunch
 import io.github.hypershell.terminal.TerminalMode
 import io.github.hypershell.terminal.TerminalRuntime
+import io.github.hypershell.terminal.UbuntuBackend
 import io.github.hypershell.terminal.TermuxEnvironmentManager
 import io.github.hypershell.terminal.TermuxEnvironmentStatus
 import io.github.hypershell.terminal.TerminalSession
@@ -63,6 +64,7 @@ enum class AppPage { Terminal, Files, Settings, Appearance }
 sealed interface Confirmation {
     data class SaveFile(val path: String) : Confirmation
     data class ExtractZip(val name: String, val destination: String) : Confirmation
+    data class UbuntuProotFallback(val reason: String) : Confirmation
 }
 
 data class FileActionState(
@@ -79,6 +81,7 @@ data class HyperShellUiState(
     val terminalInput: String = "",
     val terminalInputMode: TerminalInputMode = TerminalInputMode.CommandEditor,
     val terminalRuntime: TerminalRuntime = TerminalRuntime.Termux,
+    val ubuntuBackend: UbuntuBackend = UbuntuBackend.Chroot,
     val termuxEnvironmentStatus: TermuxEnvironmentStatus = TermuxEnvironmentStatus.Checking,
     val rootAccess: RootAccess = RootAccess.Unknown,
     val currentPath: String = "/",
@@ -156,6 +159,7 @@ class HyperShellViewModel @JvmOverloads constructor(
                     settings.terminalFont,
                     settings.customTerminalFontPath,
                     settings.terminalBackgroundImagePath != null,
+                    settings.terminalHdrHighlight,
                 )
             }
         }
@@ -207,9 +211,15 @@ class HyperShellViewModel @JvmOverloads constructor(
         }
         viewModelScope.launch {
             if (target == TerminalRuntime.Ubuntu) {
-                message("正在准备轻量 Ubuntu 环境…")
-                termuxEnvironment.ensureUbuntuInstalled().getOrElse { error ->
+                message("正在准备 Ubuntu chroot 环境…")
+                termuxEnvironment.ensureUbuntuInstalled(requireProot = false).getOrElse { error ->
                     message(error.message ?: "Ubuntu 环境不可用")
+                    return@launch
+                }
+                termuxEnvironment.checkChrootSupport().onFailure { error ->
+                    _uiState.update {
+                        it.copy(confirmation = Confirmation.UbuntuProotFallback(error.message ?: "Root chroot 不可用"))
+                    }
                     return@launch
                 }
             } else {
@@ -219,9 +229,14 @@ class HyperShellViewModel @JvmOverloads constructor(
                 }
             }
             terminalSession.terminate()
-            _uiState.update { it.copy(terminalRuntime = target) }
+            _uiState.update { it.copy(terminalRuntime = target, ubuntuBackend = UbuntuBackend.Chroot) }
             terminalSession.start(
-                TerminalLaunch.Interactive(TerminalMode.User, termuxEnvironment.home.absolutePath, target),
+                TerminalLaunch.Interactive(
+                    TerminalMode.User,
+                    termuxEnvironment.home.absolutePath,
+                    target,
+                    UbuntuBackend.Chroot,
+                ),
             )
         }
     }
@@ -233,6 +248,7 @@ class HyperShellViewModel @JvmOverloads constructor(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
+        hdrHighlight: Boolean,
     ): Boolean {
         val termuxSession = terminalSession as? TermuxTerminalSession ?: return false
         termuxSession.attachView(
@@ -242,6 +258,7 @@ class HyperShellViewModel @JvmOverloads constructor(
             terminalFont,
             customFontPath,
             transparentBackground,
+            hdrHighlight,
         ) { size -> updateSettings { it.copy(terminalFontSize = size.coerceIn(9f, 28f)) } }
         return true
     }
@@ -259,12 +276,14 @@ class HyperShellViewModel @JvmOverloads constructor(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
+        hdrHighlight: Boolean,
     ) {
         (terminalSession as? TermuxTerminalSession)?.updateAppearance(
             backgroundColor,
             terminalFont,
             customFontPath,
             transparentBackground,
+            hdrHighlight,
         )
     }
 
@@ -341,6 +360,10 @@ class HyperShellViewModel @JvmOverloads constructor(
             is Confirmation.ExtractZip -> {
                 dismissConfirmation()
                 extractPendingZipItem()
+            }
+            is Confirmation.UbuntuProotFallback -> {
+                dismissConfirmation()
+                startUbuntuProotFallback()
             }
             null -> Unit
         }
@@ -667,12 +690,48 @@ class HyperShellViewModel @JvmOverloads constructor(
             }
             val runtime = _uiState.value.terminalRuntime
             if (runtime == TerminalRuntime.Ubuntu) {
-                termuxEnvironment.ensureUbuntuInstalled().getOrElse { error ->
+                val backend = _uiState.value.ubuntuBackend
+                termuxEnvironment.ensureUbuntuInstalled(requireProot = backend == UbuntuBackend.Proot).getOrElse { error ->
                     message(error.message ?: "Ubuntu 环境不可用")
                     return@launch
                 }
+                if (backend == UbuntuBackend.Chroot) {
+                    termuxEnvironment.checkChrootSupport().onFailure { error ->
+                        _uiState.update {
+                            it.copy(confirmation = Confirmation.UbuntuProotFallback(error.message ?: "Root chroot 不可用"))
+                        }
+                        return@launch
+                    }
+                }
             }
-            terminalSession.start(TerminalLaunch.Interactive(mode, termuxEnvironment.home.absolutePath, runtime))
+            terminalSession.start(
+                TerminalLaunch.Interactive(
+                    mode,
+                    termuxEnvironment.home.absolutePath,
+                    runtime,
+                    _uiState.value.ubuntuBackend,
+                ),
+            )
+        }
+    }
+
+    private fun startUbuntuProotFallback() {
+        viewModelScope.launch {
+            message("正在准备 proot 兼容模式…")
+            termuxEnvironment.ensureUbuntuInstalled(requireProot = true).getOrElse { error ->
+                message(error.message ?: "proot 兼容模式不可用")
+                return@launch
+            }
+            terminalSession.terminate()
+            _uiState.update { it.copy(terminalRuntime = TerminalRuntime.Ubuntu, ubuntuBackend = UbuntuBackend.Proot) }
+            terminalSession.start(
+                TerminalLaunch.Interactive(
+                    TerminalMode.User,
+                    termuxEnvironment.home.absolutePath,
+                    TerminalRuntime.Ubuntu,
+                    UbuntuBackend.Proot,
+                ),
+            )
         }
     }
 

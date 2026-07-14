@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Typeface
+import android.graphics.Color
 import android.system.Os
 import android.util.Log
 import android.view.KeyEvent
@@ -45,6 +46,7 @@ class TermuxTerminalSession(
     private var terminalFont = TerminalFont.SystemMono
     private var customFontPath: String? = null
     private var transparentBackground = false
+    private var hdrHighlight = false
     private var onFontSizeChanged: ((Float) -> Unit)? = null
 
     override suspend fun start(launch: TerminalLaunch, rows: Int, columns: Int) {
@@ -76,6 +78,7 @@ class TermuxTerminalSession(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
+        hdrHighlight: Boolean,
         onFontSizeChanged: (Float) -> Unit,
     ) {
         this.textSizePx = textSizePx.coerceAtLeast(8)
@@ -85,7 +88,7 @@ class TermuxTerminalSession(
         view.setTerminalViewClient(this)
         view.setTextSize(this.textSizePx)
         this.onFontSizeChanged = onFontSizeChanged
-        updateAppearance(backgroundColor, terminalFont, customFontPath, transparentBackground)
+        updateAppearance(backgroundColor, terminalFont, customFontPath, transparentBackground, hdrHighlight)
         coreSession?.let(::attachViewInternal)
     }
 
@@ -103,16 +106,23 @@ class TermuxTerminalSession(
         terminalFont: TerminalFont,
         customFontPath: String?,
         transparentBackground: Boolean,
+        hdrHighlight: Boolean,
     ) {
         this.transparentBackground = transparentBackground
         val opaqueBackground = backgroundColor or (0xFF shl 24)
         this.backgroundColor = if (transparentBackground) 0x00000000 else opaqueBackground
         this.terminalFont = terminalFont
         this.customFontPath = customFontPath
+        this.hdrHighlight = hdrHighlight
         val foreground = if (!transparentBackground && TerminalColors.getPerceivedBrightnessOfColor(opaqueBackground) >= 150) {
             0xFF101010.toInt()
         } else {
             0xFFF5F5F5.toInt()
+        }
+        BASE_COLORS.indices.forEach { index ->
+            val color = if (hdrHighlight && index < TextStyle.NUM_INDEXED_COLORS) boostColor(BASE_COLORS[index]) else BASE_COLORS[index]
+            TerminalColors.COLOR_SCHEME.mDefaultColors[index] = color
+            coreSession?.emulator?.mColors?.mCurrentColors?.set(index, color)
         }
         TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_BACKGROUND] = this.backgroundColor
         TerminalColors.COLOR_SCHEME.mDefaultColors[TextStyle.COLOR_INDEX_FOREGROUND] = foreground
@@ -180,7 +190,7 @@ class TermuxTerminalSession(
                 TerminalMode.User -> listOf(environmentManager.bash.absolutePath, "-l")
                 TerminalMode.Root -> listOf("su", "-c", rootCommand(environmentManager.bash.absolutePath, "-l"))
             }
-            TerminalRuntime.Ubuntu -> environmentManager.ubuntuCommand()
+            TerminalRuntime.Ubuntu -> environmentManager.ubuntuCommand(launch.ubuntuBackend)
         }
         is TerminalLaunch.Script -> when (launch.mode) {
             TerminalMode.User -> listOf(environmentManager.bash.absolutePath, launch.path)
@@ -280,4 +290,17 @@ class TermuxTerminalSession(
     private fun typefaceFor(font: TerminalFont, customPath: String?): Typeface =
         TerminalTypefaceResolver.terminal(context, font, customPath)
     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
+
+    private fun boostColor(color: Int): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        if (hsv[2] < 0.06f) return color
+        hsv[1] = (hsv[1] * 1.12f).coerceAtMost(1f)
+        hsv[2] = (hsv[2] * 1.18f + 0.025f).coerceAtMost(1f)
+        return Color.HSVToColor(Color.alpha(color), hsv)
+    }
+
+    private companion object {
+        val BASE_COLORS: IntArray = TerminalColors.COLOR_SCHEME.mDefaultColors.clone()
+    }
 }

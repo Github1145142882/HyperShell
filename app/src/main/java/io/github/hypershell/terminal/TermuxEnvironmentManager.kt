@@ -14,6 +14,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 sealed interface TermuxEnvironmentStatus {
@@ -71,7 +72,7 @@ class TermuxEnvironmentManager(
         )
     }
 
-    suspend fun ensureUbuntuInstalled(): Result<Unit> {
+    suspend fun ensureUbuntuInstalled(requireProot: Boolean = false): Result<Unit> {
         ensureInstalled().getOrElse { return Result.failure(it) }
         return ubuntuMutex.withLock {
             withContext(ioDispatcher) {
@@ -79,10 +80,10 @@ class TermuxEnvironmentManager(
                     val asset = ubuntuAssetName()
                     val expected = expectedDigest(asset)
                     val marker = File(ubuntuRoot, UBUNTU_MARKER)
-                    ensureProot()
+                    if (requireProot) ensureProot()
                     if (File(ubuntuRoot, "bin/bash").isFile && marker.readTextOrNull() == expected) {
                         configureUbuntuRoot(ubuntuRoot)
-                        updateUbuntuAptIndexesIfNeeded()
+                        if (requireProot) updateUbuntuAptIndexesIfNeeded()
                         return@runCatching
                     }
 
@@ -125,7 +126,7 @@ class TermuxEnvironmentManager(
                         File(staging, UBUNTU_MARKER).writeText("$actual\n")
                         ubuntuRoot.deleteRecursively()
                         check(staging.renameTo(ubuntuRoot)) { "无法启用 Ubuntu 环境" }
-                        updateUbuntuAptIndexesIfNeeded()
+                        if (requireProot) updateUbuntuAptIndexesIfNeeded()
                     } finally {
                         archive.delete()
                         staging.deleteRecursively()
@@ -135,7 +136,28 @@ class TermuxEnvironmentManager(
         }
     }
 
-    fun ubuntuCommand(): List<String> {
+    fun ubuntuCommand(backend: UbuntuBackend): List<String> = when (backend) {
+        UbuntuBackend.Chroot -> chrootProcessCommand("enter")
+        UbuntuBackend.Proot -> ubuntuProotCommand()
+    }
+
+    suspend fun checkChrootSupport(): Result<Unit> = withContext(ioDispatcher) {
+        runCatching {
+            val command = chrootProcessCommand("probe")
+            val child = ProcessBuilder(command).redirectErrorStream(true).start()
+            if (!child.waitFor(CHROOT_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                child.destroyForcibly()
+                error("Root chroot 能力检查超时；KernelSU 可能尚未授予权限")
+            }
+            val output = child.inputStream.bufferedReader().use { it.readText().trim() }
+            check(child.exitValue() == 0) {
+                if (output.isNotBlank()) output.takeLast(600)
+                else "Root chroot 不可用：请检查 KernelSU 的 UID 0、CAP_SYS_ADMIN、CAP_SYS_CHROOT 与 SELinux 配置"
+            }
+        }
+    }
+
+    private fun ubuntuProotCommand(): List<String> {
         val proot = File(prefix, "bin/proot")
         check(proot.isFile && File(ubuntuRoot, "bin/bash").isFile) { "Ubuntu 环境尚未安装" }
         return listOf(
@@ -155,6 +177,17 @@ class TermuxEnvironmentManager(
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "/bin/bash", "--login",
         )
+    }
+
+    private fun chrootProcessCommand(action: String): List<String> {
+        val sourceApk = appContext.applicationInfo.sourceDir
+        val nativeLibrary = File(appContext.applicationInfo.nativeLibraryDir, "libhypershell_chroot.so")
+        check(nativeLibrary.isFile) { "APK 缺少 chroot Native 组件" }
+        val className = ChrootProcessMain::class.java.name
+        val command = "exec env CLASSPATH=${shellQuote(sourceApk)} /system/bin/app_process /system/bin " +
+            "${shellQuote(className)} ${shellQuote(nativeLibrary.absolutePath)} ${shellQuote(action)} " +
+            "${shellQuote(ubuntuRoot.absolutePath)} ${shellQuote(home.absolutePath)}"
+        return listOf("su", "-c", command)
     }
 
     private fun isReady(): Boolean {
@@ -393,13 +426,58 @@ class TermuxEnvironmentManager(
                     "deb http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse\n",
             )
         }
+        File(root, "usr/local/bin/pkg").apply {
+            parentFile?.mkdirs()
+            writeText(
+                """#!/bin/bash
+set -e
+command=${'$'}{1:-help}
+[[ ${'$'}# -gt 0 ]] && shift
+ensure_indexes() {
+  find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q . || /usr/bin/apt update
+}
+case "${'$'}command" in
+  install|in)
+    ensure_indexes
+    mapped=()
+    for argument in "${'$'}@"; do
+      if [[ "${'$'}argument" == python ]]; then
+        mapped+=(python3 python-is-python3)
+      else
+        mapped+=("${'$'}argument")
+      fi
+    done
+    exec /usr/bin/apt install "${'$'}{mapped[@]}"
+    ;;
+  update|up) exec /usr/bin/apt update ;;
+  upgrade) /usr/bin/apt update && exec /usr/bin/apt full-upgrade "${'$'}@" ;;
+  remove|uninstall) exec /usr/bin/apt remove "${'$'}@" ;;
+  search) exec /usr/bin/apt search "${'$'}@" ;;
+  show) exec /usr/bin/apt show "${'$'}@" ;;
+  list-all) exec /usr/bin/apt list ;;
+  clean) exec /usr/bin/apt clean ;;
+  *)
+    printf '%s\n' 'HyperShell pkg (Ubuntu APT backend)' \
+      'pkg install <package>' 'pkg update' 'pkg upgrade' \
+      'pkg search <query>' 'pkg remove <package>'
+    ;;
+esac
+""",
+            )
+            Os.chmod(absolutePath, 0b111_101_101)
+        }
+        File(root, "usr/sbin/policy-rc.d").apply {
+            parentFile?.mkdirs()
+            writeText("#!/bin/sh\nexit 101\n")
+            Os.chmod(absolutePath, 0b111_101_101)
+        }
     }
 
     private fun updateUbuntuAptIndexesIfNeeded() {
         val lists = File(ubuntuRoot, "var/lib/apt/lists")
         val hasIndexes = lists.listFiles().orEmpty().any { it.isFile && it.length() > 0L }
         if (hasIndexes) return
-        val command = ubuntuCommand().dropLast(2) + listOf(
+        val command = ubuntuProotCommand().dropLast(2) + listOf(
             "/usr/bin/apt-get",
             "-o", "Acquire::Retries=1",
             "-o", "Acquire::http::Timeout=15",
@@ -507,10 +585,13 @@ class TermuxEnvironmentManager(
         const val MARKER = ".hypershell-bootstrap-version"
         const val UBUNTU_MARKER = ".hypershell-ubuntu-version"
         const val PACMAN_DB_VERSION = "9"
+        const val CHROOT_PROBE_TIMEOUT_SECONDS = 20L
         const val REMOTE_REPOSITORY =
             "https://raw.githubusercontent.com/Github1145142882/HyperShell/gh-pages/"
     }
 }
+
+private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
 private fun File.readTextOrNull(): String? = runCatching { readText().trim() }.getOrNull()
 
