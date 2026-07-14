@@ -15,7 +15,7 @@ if [[ $EUID -eq 0 ]]; then
     -e 's/python3\.14-venv/python3-venv/g' \
     -e 's#apt\.llvm\.org/resolute#apt.llvm.org/noble#g' \
     -e 's/llvm-toolchain-resolute-/llvm-toolchain-noble-/g' \
-    -e 's/coreutils-from-uutils//g' \
+    -e '/^mkdir -p \/tmp\/build-essential-build$/,/^\$SUDO apt-mark hold build-essential$/d' \
     "$scripts_dir/setup-ubuntu.sh" > "$compat_script"
   bash "$compat_script"
   echo "Ubuntu system dependencies are ready."
