@@ -45,5 +45,5 @@ else
   echo "Repository generated unsigned; set HYPERSHELL_REPO_SIGNING_KEY before publishing." >&2
 fi
 
-"$ROOT/termux-build/scripts/sync-repository-assets.sh"
+bash "$ROOT/termux-build/scripts/sync-repository-assets.sh"
 echo "Offline APK repository copied to $ASSET_REPO"
