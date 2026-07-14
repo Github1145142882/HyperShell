@@ -72,7 +72,7 @@ data class FileActionState(
 )
 
 data class HyperShellUiState(
-    val page: AppPage = AppPage.Files,
+    val page: AppPage = AppPage.Terminal,
     val settings: AppSettings = AppSettings(),
     val terminalStatus: TerminalStatus = TerminalStatus.Idle,
     val terminalSnapshot: TerminalSnapshot = TerminalBuffer().snapshot(),

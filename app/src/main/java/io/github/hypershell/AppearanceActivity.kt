@@ -17,6 +17,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.hypershell.settings.AppSettings
 import io.github.hypershell.settings.OfficialFontInstaller
 import io.github.hypershell.settings.SettingsRepository
+import io.github.hypershell.terminal.TerminalTypefaceResolver
 import io.github.hypershell.ui.AppearancePage
 import io.github.hypershell.ui.HyperShellTheme
 import kotlinx.coroutines.flow.SharingStarted
@@ -95,7 +96,10 @@ internal class AppearanceSettingsViewModel(application: Application) : AndroidVi
                         require(copied in 1..MAX_FONT_BYTES) { "字体文件须小于 16 MiB" }
                     }
                 }
-                Typeface.createFromFile(temporary)
+                val typeface = Typeface.createFromFile(temporary)
+                require(TerminalTypefaceResolver.isMonospaced(typeface)) {
+                    "终端只支持等宽字体；比例字体会导致字符被横向拉伸"
+                }
                 check(temporary.renameTo(target) || temporary.copyTo(target, overwrite = true).exists())
                 repository.update {
                     it.copy(terminalFont = io.github.hypershell.settings.TerminalFont.Custom, customTerminalFontPath = target.absolutePath)

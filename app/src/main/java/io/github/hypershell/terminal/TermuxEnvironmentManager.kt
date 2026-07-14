@@ -80,7 +80,11 @@ class TermuxEnvironmentManager(
                     val expected = expectedDigest(asset)
                     val marker = File(ubuntuRoot, UBUNTU_MARKER)
                     ensureProot()
-                    if (File(ubuntuRoot, "bin/bash").isFile && marker.readTextOrNull() == expected) return@runCatching
+                    if (File(ubuntuRoot, "bin/bash").isFile && marker.readTextOrNull() == expected) {
+                        configureUbuntuRoot(ubuntuRoot)
+                        updateUbuntuAptIndexesIfNeeded()
+                        return@runCatching
+                    }
 
                     val staging = File(appContext.filesDir, "ubuntu-rootfs-staging")
                     val archive = File(appContext.cacheDir, "hypershell-ubuntu-base.tar.gz")
@@ -117,13 +121,11 @@ class TermuxEnvironmentManager(
                             .start()
                         val output = child.inputStream.bufferedReader().use { it.readText() }
                         check(child.waitFor() == 0) { "Ubuntu Base 解压失败：${output.takeLast(1200)}" }
-                        File(staging, "etc/resolv.conf").apply {
-                            parentFile?.mkdirs()
-                            writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
-                        }
+                        configureUbuntuRoot(staging)
                         File(staging, UBUNTU_MARKER).writeText("$actual\n")
                         ubuntuRoot.deleteRecursively()
                         check(staging.renameTo(ubuntuRoot)) { "无法启用 Ubuntu 环境" }
+                        updateUbuntuAptIndexesIfNeeded()
                     } finally {
                         archive.delete()
                         staging.deleteRecursively()
@@ -317,7 +319,7 @@ class TermuxEnvironmentManager(
             )
         }
         repairPacmanDatabase()
-        installPacmanLauncher()
+        repairPacmanLauncher()
     }
 
     private fun installRepositoryKey(): File {
@@ -359,26 +361,55 @@ class TermuxEnvironmentManager(
         if (packageEntries.isEmpty()) version.writeText("$PACMAN_DB_VERSION\n")
     }
 
-    private fun installPacmanLauncher() {
+    private fun repairPacmanLauncher() {
         val pacman = File(prefix, "bin/pacman")
-        if (!pacman.isFile) return
         val realPacman = File(prefix, "libexec/hypershell/pacman-real")
-        realPacman.parentFile?.mkdirs()
         val marker = "# HYPERSHELL_PACMAN_LAUNCHER"
-        if (pacman.readPrefix(marker.length + 64).contains(marker)) return
-        check(pacman.renameTo(realPacman) || pacman.copyTo(realPacman, overwrite = true).exists()) {
-            "无法安装 pacman 启动器"
+        if (pacman.isFile && pacman.readPrefix(marker.length + 96).contains(marker)) {
+            check(realPacman.isFile) { "pacman 真实程序缺失，请重新安装应用数据" }
+            val restored = File(prefix, "bin/.pacman-restored")
+            realPacman.copyTo(restored, overwrite = true)
+            Os.chmod(restored.absolutePath, 0b111_000_000)
+            check(pacman.delete() && restored.renameTo(pacman)) { "无法恢复 pacman 程序" }
         }
-        Os.chmod(realPacman.absolutePath, 0b111_000_000)
-        pacman.writeText(
-            "#!/data/data/io.github.hypershell/files/usr/bin/bash\n" +
-                "$marker\n" +
-                "if [[ \$# -eq 0 ]]; then\n" +
-                "  exec ${realPacman.absolutePath} --help\n" +
-                "fi\n" +
-                "exec ${realPacman.absolutePath} \"\$@\"\n",
+        if (pacman.isFile) Os.chmod(pacman.absolutePath, 0b111_000_000)
+        // Keep the old name as a compatibility alias for users who followed
+        // the previous broken launcher's message.
+        val alias = File(prefix, "bin/pacman-real")
+        if (pacman.isFile && !alias.exists()) runCatching { Os.symlink("pacman", alias.absolutePath) }
+    }
+
+    private fun configureUbuntuRoot(root: File) {
+        File(root, "etc/resolv.conf").apply {
+            parentFile?.mkdirs()
+            writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+        }
+        File(root, "etc/apt/sources.list").apply {
+            parentFile?.mkdirs()
+            writeText(
+                "deb http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse\n" +
+                    "deb http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse\n" +
+                    "deb http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse\n" +
+                    "deb http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse\n",
+            )
+        }
+    }
+
+    private fun updateUbuntuAptIndexesIfNeeded() {
+        val lists = File(ubuntuRoot, "var/lib/apt/lists")
+        val hasIndexes = lists.listFiles().orEmpty().any { it.isFile && it.length() > 0L }
+        if (hasIndexes) return
+        val command = ubuntuCommand().dropLast(2) + listOf(
+            "/usr/bin/apt-get",
+            "-o", "Acquire::Retries=1",
+            "-o", "Acquire::http::Timeout=15",
+            "update",
         )
-        Os.chmod(pacman.absolutePath, 0b111_000_000)
+        runCatching {
+            val child = ProcessBuilder(command).redirectErrorStream(true).start()
+            child.inputStream.bufferedReader().use { it.readText() }
+            child.waitFor()
+        }
     }
 
     private fun File.readPrefix(limit: Int): String = runCatching {

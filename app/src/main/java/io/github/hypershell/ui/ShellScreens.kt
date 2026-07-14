@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -81,6 +82,7 @@ import io.github.hypershell.settings.TerminalFont
 import io.github.hypershell.terminal.TerminalMode
 import io.github.hypershell.terminal.TerminalRuntime
 import io.github.hypershell.terminal.TerminalStatus
+import io.github.hypershell.terminal.TerminalTypefaceResolver
 import io.github.hypershell.terminal.TermuxEnvironmentStatus
 import io.github.hypershell.ui.kit.util.BlurredBar
 import io.github.hypershell.ui.kit.util.rememberBlurBackdrop
@@ -260,7 +262,6 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
             }
             when (state.rootAccess) {
                 RootAccess.Granted -> {
-                    if (state.filesLoading) item { Text("正在读取…", color = MiuixTheme.colorScheme.primary, modifier = Modifier.padding(12.dp)) }
                     items(state.entries, key = RootFileEntry::path) { entry ->
                         FileRow(
                             entry = entry,
@@ -813,7 +814,7 @@ fun AppearancePage(
                     )
                     ArrowPreference(
                         title = "导入自定义字体",
-                        summary = settings.customTerminalFontPath?.substringAfterLast('/') ?: "支持 TTF / OTF，最多 16 MiB",
+                        summary = settings.customTerminalFontPath?.substringAfterLast('/') ?: "仅支持等宽 TTF / OTF，最多 16 MiB",
                         onClick = importCustomFont,
                     )
                     ArrowPreference(
@@ -857,6 +858,7 @@ fun AppearancePage(
                     SliderPreference(settings.blurRadius, { v -> updateSettings { it.copy(blurRadius = v) } }, title = "模糊半径", valueText = "${settings.blurRadius.toInt()} dp", valueRange = 12f..48f, steps = 8)
                 }
             }
+            item { TerminalFontPreview(settings) }
         }
         OverlayDialog(
             show = colorDialog,
@@ -990,6 +992,31 @@ fun AppearancePage(
 }
 
 @Composable
+private fun TerminalFontPreview(settings: AppSettings) {
+    val context = LocalContext.current
+    val requested = remember(settings.terminalFont, settings.customTerminalFontPath) {
+        TerminalTypefaceResolver.requested(context, settings.terminalFont, settings.customTerminalFontPath)
+    }
+    val compatible = remember(requested) { TerminalTypefaceResolver.isMonospaced(requested) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("字体渲染预览", style = MiuixTheme.textStyles.title4)
+            Text(
+                if (compatible) "终端等宽检查通过" else "该字体为比例字体；终端将自动使用系统等宽字体，避免字符拉伸",
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MiuixTheme.textStyles.footnote1,
+            )
+            Text(
+                "~ \$ echo HyperShell\n0123456789  ABC xyz\n中文测试  |  →  ✓",
+                fontFamily = FontFamily(requested),
+                fontSize = settings.terminalFontSize.sp,
+                lineHeight = (settings.terminalFontSize * 1.45f).sp,
+            )
+        }
+    }
+}
+
+@Composable
 private fun EditorPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: Dp) {
     val title = state.document?.path?.substringAfterLast('/') ?: state.textPage?.path?.substringAfterLast('/') ?: "文本"
     KitPage(title, state.settings.bottomBarBlur, bottomPadding, navigation = { IconButton(onClick = vm::closeDocument) { Icon(MiuixIcons.Back, "关闭") } }) { modifier, scaffoldPadding, navigationPadding, _, _ ->
@@ -1029,7 +1056,6 @@ fun ZipPreviewPage(state: HyperShellUiState, vm: HyperShellViewModel, back: () -
             overscrollEffect = null,
         ) {
             if (state.zipDirectory.isNotEmpty()) item { Card { BasicComponent(title = "返回上级", onClick = vm::navigateUpZip) } }
-            if (state.zipLoading) item { Text("正在读取 ZIP…", modifier = Modifier.padding(12.dp)) }
             items(state.zipEntries, key = ZipItem::path) { item ->
                 Card(Modifier.fillMaxWidth(), onClick = { vm.openZipItem(item) }, showIndication = true) {
                     BasicComponent(

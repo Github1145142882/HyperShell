@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Termux's official terminal-emulator and terminal-view wired to HyperShell's lifecycle contract.
@@ -278,19 +277,7 @@ class TermuxTerminalSession(
     override fun logStackTrace(tag: String, e: Exception) { Log.e(tag, e.message, e) }
 
     private fun clipboard() = context.getSystemService(ClipboardManager::class.java)
-    private fun typefaceFor(font: TerminalFont, customPath: String?): Typeface = when (font) {
-        TerminalFont.SystemMono -> Typeface.MONOSPACE
-        TerminalFont.SansMono -> Typeface.create("sans-serif-monospace", Typeface.NORMAL)
-        TerminalFont.SerifMono -> Typeface.create("serif-monospace", Typeface.NORMAL)
-        TerminalFont.MiSans -> File(context.filesDir, "fonts/misans-regular.ttf")
-            .takeIf(File::isFile)
-            ?.let { runCatching { Typeface.createFromFile(it) }.getOrNull() }
-            ?: Typeface.MONOSPACE
-        TerminalFont.Custom -> customPath
-            ?.let(::File)
-            ?.takeIf(File::isFile)
-            ?.let { runCatching { Typeface.createFromFile(it) }.getOrNull() }
-            ?: Typeface.MONOSPACE
-    }
+    private fun typefaceFor(font: TerminalFont, customPath: String?): Typeface =
+        TerminalTypefaceResolver.terminal(context, font, customPath)
     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
 }
