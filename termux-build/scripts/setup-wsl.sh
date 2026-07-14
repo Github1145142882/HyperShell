@@ -5,7 +5,11 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 source "$ROOT/termux-build/versions.env"
 
 if [[ $EUID -eq 0 ]]; then
-  "$ROOT/third_party/termux-packages/scripts/setup-ubuntu.sh"
+  # The pinned Termux checkout currently names python3.14-venv, while Ubuntu
+  # 24.04 runners provide the distribution-supported python3-venv package.
+  # Feed a compatibility-adjusted copy to bash without modifying the submodule.
+  sed 's/python3\.14-venv/python3-venv/g' \
+    "$ROOT/third_party/termux-packages/scripts/setup-ubuntu.sh" | bash
   echo "Ubuntu system dependencies are ready."
   exit 0
 fi

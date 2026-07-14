@@ -27,10 +27,17 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Install repository metadata dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils
+
       - name: Install Termux host dependencies
+        if: inputs.packages != ''
         run: sudo bash termux-build/scripts/setup-wsl.sh
 
       - name: Prepare pinned HyperShell toolchain
+        if: inputs.packages != ''
         run: bash termux-build/scripts/setup-wsl.sh
 
       - name: Restore packages from current repository branch
