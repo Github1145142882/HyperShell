@@ -96,8 +96,10 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git switch --orphan gh-pages
-          git rm -rf .
-          git clean -fdx
+          git rm -rf . || true
+          # This is an ephemeral Actions checkout. Double force is required to
+          # remove checked-out submodule repositories from the orphan branch.
+          git clean -ffdx
           cp -R /tmp/hypershell-repository/. .
           git add -A
           packages='${{ inputs.packages }}'
