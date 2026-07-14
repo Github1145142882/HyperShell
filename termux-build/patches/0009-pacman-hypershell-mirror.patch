@@ -1,0 +1,16 @@
+diff --git a/packages/pacman/build.sh b/packages/pacman/build.sh
+index 0fec7e3..1907e65 100644
+--- a/packages/pacman/build.sh
++++ b/packages/pacman/build.sh
+@@ -36,7 +36,10 @@ termux_step_post_configure() {
+ 
+ termux_step_post_make_install() {
+ 	mkdir -p $TERMUX_PREFIX/etc/pacman.d
+-	install -m644 $TERMUX_PKG_BUILDER_DIR/mirrorlist $TERMUX_PREFIX/etc/pacman.d/mirrorlist
++	cat > $TERMUX_PREFIX/etc/pacman.d/mirrorlist <<- EOF
++		# HyperShell packages must be rebuilt for io.github.hypershell.
++		# Add the signed HyperShell pacman repository only after it is published.
++	EOF
+ 
+ 	cd $TERMUX_PKG_SRCDIR/pacman-alternatives-$_PALT_VERSION/
+ 	make DEF_OS="android" \

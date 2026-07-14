@@ -1,0 +1,98 @@
+name: Build HyperShell repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: Space or comma separated Termux package names
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hypershell-repository
+  cancel-in-progress: false
+
+jobs:
+  repository:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      HYPERSHELL_LINUX_BUILD_ROOT: ${{ github.workspace }}/.linux-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Termux host dependencies
+        run: sudo bash termux-build/scripts/setup-wsl.sh
+
+      - name: Prepare pinned HyperShell toolchain
+        run: bash termux-build/scripts/setup-wsl.sh
+
+      - name: Restore packages from current repository branch
+        shell: bash
+        run: |
+          mkdir -p "$HYPERSHELL_LINUX_BUILD_ROOT/termux-packages/output"
+          if git fetch origin gh-pages && git cat-file -e origin/gh-pages:pool 2>/dev/null; then
+            mkdir -p /tmp/hypershell-existing
+            git archive origin/gh-pages pool | tar -x -C /tmp/hypershell-existing
+            find /tmp/hypershell-existing/pool -type f -name '*.deb' \
+              -exec cp -f {} "$HYPERSHELL_LINUX_BUILD_ROOT/termux-packages/output/" \;
+          fi
+
+      - name: Build requested packages
+        shell: bash
+        env:
+          REQUESTED_PACKAGES: ${{ inputs.packages }}
+        run: |
+          cd "$HYPERSHELL_LINUX_BUILD_ROOT/termux-packages"
+          requested=${REQUESTED_PACKAGES//,/ }
+          if [[ -z "${requested// }" ]]; then
+            echo "Publishing signed repository metadata without building packages."
+            exit 0
+          fi
+          for package in $requested; do
+            [[ "$package" =~ ^[a-z0-9+.-]+$ ]] || {
+              echo "Invalid package name: $package" >&2
+              exit 1
+            }
+            ./build-package.sh "$package"
+          done
+
+      - name: Import repository signing key
+        shell: bash
+        env:
+          REPOSITORY_PRIVATE_KEY: ${{ secrets.HYPERSHELL_REPOSITORY_PRIVATE_KEY }}
+        run: |
+          test -n "$REPOSITORY_PRIVATE_KEY"
+          printf '%s' "$REPOSITORY_PRIVATE_KEY" | gpg --batch --import
+          fingerprint=$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr:/ {print $10; exit}')
+          test "$fingerprint" = "8E64A89086F333F1F7F9F377A3E1FB40B7858DC1"
+          echo "HYPERSHELL_REPO_SIGNING_KEY=$fingerprint" >> "$GITHUB_ENV"
+
+      - name: Generate and verify signed APT repository
+        shell: bash
+        run: |
+          bash termux-build/scripts/publish-repository.sh
+          gpg --batch --verify termux-build/generated/repository/dists/stable/InRelease
+          bash termux-build/scripts/verify-repository.sh termux-build/generated/repository
+
+      - name: Publish binary-only gh-pages branch
+        shell: bash
+        run: |
+          cp -R termux-build/generated/repository /tmp/hypershell-repository
+          touch /tmp/hypershell-repository/.nojekyll
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch --orphan gh-pages
+          git rm -rf .
+          git clean -fdx
+          cp -R /tmp/hypershell-repository/. .
+          git add -A
+          packages='${{ inputs.packages }}'
+          git commit -m "repository: publish ${packages:-metadata}"
+          git push --force origin HEAD:gh-pages

@@ -1,0 +1,13 @@
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index 53bb59d..fdd85d6 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -29,7 +29,7 @@ BOOTSTRAP_ANDROID10_COMPATIBLE=false
+ TERMUX_DEFAULT_ARCHITECTURES=("aarch64" "arm" "i686" "x86_64")
+ TERMUX_ARCHITECTURES=("${TERMUX_DEFAULT_ARCHITECTURES[@]}")
+ 
+-TERMUX_PACKAGES_DIRECTORY="/home/builder/termux-packages"
++TERMUX_PACKAGES_DIRECTORY="$TERMUX_SCRIPTDIR"
+ TERMUX_BUILT_DEBS_DIRECTORY="$TERMUX_PACKAGES_DIRECTORY/output"
+ TERMUX_BUILT_PACKAGES_DIRECTORY="/data/data/.built-packages"
+ 

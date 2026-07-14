@@ -1,0 +1,191 @@
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index e70e32cb2..bf2ae8677 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -47,12 +47,15 @@ declare -a ADDITIONAL_PACKAGES=()
+ # A list of already extracted packages
+ declare -a EXTRACTED_PACKAGES=()
+ 
++# The exact dependency closure selected for the current bootstrap architecture.
++declare -a BOOTSTRAP_DEBS=()
++
+ # A list of options to pass to build-package.sh
+ declare -a BUILD_PACKAGE_OPTIONS=()
+ 
+ # Check for some important utilities that may not be available for
+ # some reason.
+-for cmd in ar awk curl grep gzip find sed tar xargs xz zip; do
++for cmd in ar awk curl dpkg-deb grep gzip find python3 sed tar xargs xz zip; do
+ 	if [ -z "$(command -v $cmd)" ]; then
+ 		echo "[!] Utility '$cmd' is not available in PATH."
+ 		exit 1
+@@ -116,19 +119,16 @@ extract_debs() {
+ 	local deb
+ 	local file
+ 
+-	cd "$TERMUX_BUILT_DEBS_DIRECTORY"
+-
+-	if [ -z "$(ls -A)" ]; then
++	if [ "${#BOOTSTRAP_DEBS[@]}" -eq 0 ]; then
+ 		echo $'\n\n\n'"No debs found"
+ 		return 1
+ 	else
+-		echo $'\n\n\n'"Deb Files:"
+-		echo "\""
+-		ls
+-		echo "\""
++		echo $'\n\n\n'"Selected bootstrap debs (${#BOOTSTRAP_DEBS[@]}):"
++		printf '%s\n' "${BOOTSTRAP_DEBS[@]}"
+ 	fi
+ 
+-	for deb in *.deb; do
++	for deb_path in "${BOOTSTRAP_DEBS[@]}"; do
++		deb=$(basename "$deb_path")
+ 
+ 		current_package_name="$(echo "$deb" | sed -E 's/^([^_]+).*/\1/' )"
+ 		current_package_arch="$(echo "$deb" | sed -E 's/.*_(aarch64|all|arm|i686|x86_64).deb$/\1/' )"
+@@ -208,6 +208,18 @@ extract_debs() {
+ 
+ }
+ 
++# Select only the requested packages and their compatible transitive dependencies.
++# output/ may also contain unrelated artifacts from earlier package builds.
++select_bootstrap_debs() {
++	local package_arch="$1"
++	local selection_file="${BOOTSTRAP_TMPDIR}/selected-${package_arch}.txt"
++	python3 "$TERMUX_SCRIPTDIR/scripts/build/select-bootstrap-debs.py" \
++		--debs "$TERMUX_BUILT_DEBS_DIRECTORY" \
++		--arch "$package_arch" \
++		"${PACKAGES[@]}" > "$selection_file" || return $?
++	mapfile -t BOOTSTRAP_DEBS < "$selection_file"
++}
++
+ # Add termux bootstrap second stage files
+ add_termux_bootstrap_second_stage_files() {
+ 
+@@ -447,6 +459,7 @@ main() {
+ 
+ 		PACKAGES=()
+ 		EXTRACTED_PACKAGES=()
++		BOOTSTRAP_DEBS=()
+ 
+ 		# Package manager.
+ 		if ! ${BOOTSTRAP_ANDROID10_COMPATIBLE}; then
+@@ -503,10 +503,11 @@ main() {
+ 		for package_name in "${PACKAGES[@]}"; do
+ 			set +e
+ 			build_package "$TERMUX_ARCH" "$package_name" || return $?
+ 			set -e
+ 		done
+ 
+-		# Extract all debs.
++		# Extract only the dependency closure, not unrelated historical build outputs.
++		select_bootstrap_debs "$TERMUX_ARCH" || return $?
+ 		extract_debs "$TERMUX_ARCH" || return $?
+ 
+ 		# Add termux bootstrap second stage files
+diff --git a/scripts/build/select-bootstrap-debs.py b/scripts/build/select-bootstrap-debs.py
+new file mode 100755
+index 000000000..e05d0050a
+--- /dev/null
++++ b/scripts/build/select-bootstrap-debs.py
+@@ -0,0 +1,99 @@
++#!/usr/bin/env python3
++"""Select the compatible transitive .deb closure for a bootstrap archive."""
++
++from __future__ import annotations
++
++import argparse
++import re
++import subprocess
++import sys
++from dataclasses import dataclass
++from email.parser import Parser
++from pathlib import Path
++
++
++@dataclass(frozen=True)
++class Deb:
++    path: Path
++    package: str
++    architecture: str
++    dependencies: str
++    provides: tuple[str, ...]
++
++
++def normalize_name(value: str) -> str:
++    value = re.sub(r"\([^)]*\)|\[[^]]*\]|<[^>]*>", "", value).strip()
++    return value.split(":", 1)[0].strip()
++
++
++def metadata(path: Path) -> Deb:
++    control = subprocess.run(
++        ["dpkg-deb", "--field", str(path)],
++        check=True,
++        capture_output=True,
++        text=True,
++    ).stdout
++    fields = Parser().parsestr(control)
++    dependencies = ", ".join(
++        value for value in (fields.get("Pre-Depends"), fields.get("Depends")) if value
++    )
++    provides = tuple(
++        normalize_name(item)
++        for item in fields.get("Provides", "").split(",")
++        if normalize_name(item)
++    )
++    return Deb(path, fields["Package"], fields["Architecture"], dependencies, provides)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--debs", type=Path, required=True)
++    parser.add_argument("--arch", required=True)
++    parser.add_argument("packages", nargs="+")
++    args = parser.parse_args()
++
++    records = [metadata(path) for path in sorted(args.debs.glob("*.deb"))]
++    compatible = [record for record in records if record.architecture in (args.arch, "all")]
++    by_name: dict[str, Deb] = {}
++    by_provider: dict[str, Deb] = {}
++    for record in compatible:
++        current = by_name.get(record.package)
++        if current is None or record.path.stat().st_mtime_ns > current.path.stat().st_mtime_ns:
++            by_name[record.package] = record
++        for provided in record.provides:
++            by_provider.setdefault(provided, record)
++
++    queue = list(args.packages)
++    selected: dict[str, Deb] = {}
++    while queue:
++        requested = normalize_name(queue.pop(0))
++        if not requested or requested in selected:
++            continue
++        record = by_name.get(requested) or by_provider.get(requested)
++        if record is None:
++            print(f"No compatible .deb found for bootstrap dependency: {requested}", file=sys.stderr)
++            return 1
++        selected[record.package] = record
++        for group in record.dependencies.split(","):
++            if not group.strip():
++                continue
++            alternatives = [normalize_name(item) for item in group.split("|")]
++            dependency = next(
++                (item for item in alternatives if item in by_name or item in by_provider),
++                "",
++            )
++            if not dependency:
++                print(
++                    f"No compatible alternative for {record.package} dependency: {group.strip()}",
++                    file=sys.stderr,
++                )
++                return 1
++            queue.append(dependency)
++
++    for record in selected.values():
++        print(record.path)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

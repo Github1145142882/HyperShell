@@ -1,0 +1,17 @@
+diff --git a/packages/termux-tools/build.sh b/packages/termux-tools/build.sh
+index 8fb5c62e3..0abfd8e84 100644
+--- a/packages/termux-tools/build.sh
++++ b/packages/termux-tools/build.sh
+@@ -21,5 +21,12 @@ TERMUX_PKG_RECOMMENDS="ed, dos2unix, inetutils, net-tools, patch, unzip"
+ 
+ termux_step_pre_configure() {
++	export TERMUX_APP_PACKAGE="$TERMUX_APP__PACKAGE_NAME"
++	export TERMUX_BASE_DIR="$TERMUX__ROOTFS"
++	export TERMUX_CACHE_DIR="$TERMUX_APP__DATA_DIR/cache"
++	export TERMUX_PREFIX="$TERMUX__PREFIX"
++	export TERMUX_ANDROID_HOME="$TERMUX__HOME"
++	export TERMUX_PACKAGE_FORMAT
++	export TERMUX_PACKAGE_MANAGER
+ 	autoreconf -vfi
+ }
+ 

@@ -1,0 +1,23 @@
+diff --git a/packages/pacman/build.sh b/packages/pacman/build.sh
+index 1907e65..82b8bb1 100644
+--- a/packages/pacman/build.sh
++++ b/packages/pacman/build.sh
+@@ -47,8 +47,18 @@ termux_step_post_make_install() {
+ 		PREFIX="$TERMUX_PREFIX" \
+ 		SYSDIR="$TERMUX_PREFIX/"
+ 
++	# HyperShell does not consume Termux's pacman repositories: their absolute
++	# prefix targets com.termux. Keep pacman usable for local packages without
++	# leaving enabled repository sections that have no valid Server entry.
++	sed -i '/^\[main\]/,$d' "$TERMUX_PREFIX/etc/pacman.conf"
++	cat >> "$TERMUX_PREFIX/etc/pacman.conf" <<- EOF
++
++		# No remote repositories are enabled. HyperShell's maintained binary
++		# repository is available through apt/pkg and is bundled with the APK.
++	EOF
++
+ 	for dir in var/lib/pacman/{sync,local,alternatives} var/cache/pacman/pkg share/pacman-alternatives; do
+ 		dir="${TERMUX_PREFIX}/${dir}"
+ 		mkdir -p ${dir}
+ 		touch ${dir}/.placeholder
+ 	done

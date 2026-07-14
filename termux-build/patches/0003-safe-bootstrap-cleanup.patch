@@ -1,0 +1,28 @@
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index fdd85d6..b9faa50 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -15,6 +15,7 @@ set -e
+ export TERMUX_SCRIPTDIR=$(realpath "$(dirname "$(realpath "$0")")/../")
+ : "${TERMUX_TOPDIR:="$HOME/.termux-build"}"
+ . "${TERMUX_SCRIPTDIR}"/scripts/properties.sh
++. "${TERMUX_SCRIPTDIR}"/scripts/build/termux_error_exit.sh
+ . "${TERMUX_SCRIPTDIR}"/scripts/build/termux_step_handle_buildarch.sh
+ 
+ BOOTSTRAP_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-tmp.XXXXXXXX")
+@@ -397,8 +398,13 @@ main() {
+ 		termux_step_handle_buildarch
+ 
+ 		if [[ $FORCE_BUILD_PACKAGES == "1" ]]; then
+-			rm -f "$TERMUX_BUILT_PACKAGES_DIRECTORY_FOR_ARCH"/*
+-			rm -f "$TERMUX_BUILT_DEBS_DIRECTORY"/*
++			for cleanup_dir in "$TERMUX_BUILT_PACKAGES_DIRECTORY" "$TERMUX_BUILT_DEBS_DIRECTORY"; do
++				if [[ -z "$cleanup_dir" || "$cleanup_dir" == "/" ]]; then
++					termux_error_exit "Refusing to clean unsafe bootstrap build directory: '$cleanup_dir'"
++				fi
++				mkdir -p "$cleanup_dir"
++				rm -f "$cleanup_dir"/*
++			done
+ 		fi
+ 
+ 		BOOTSTRAP_ROOTFS="$BOOTSTRAP_TMPDIR/rootfs-${TERMUX_ARCH}"

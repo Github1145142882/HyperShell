@@ -1,0 +1,30 @@
+diff --git a/scripts/properties.sh b/scripts/properties.sh
+--- a/scripts/properties.sh
++++ b/scripts/properties.sh
+@@ -372,5 +372,5 @@
+ # Default value: `Termux`
+ ##
+-TERMUX__NAME="Termux"
++TERMUX__NAME="HyperShell"
+ 
+ ##
+@@ -465,5 +465,5 @@
+ # Default value: `com.termux`
+ ##
+-TERMUX_APP__PACKAGE_NAME="com.termux"
++TERMUX_APP__PACKAGE_NAME="io.github.hypershell"
+ TERMUX_APP_PACKAGE="$TERMUX_APP__PACKAGE_NAME" # Deprecated alternative variable for `TERMUX_APP__PACKAGE_NAME`
+ 
+diff --git a/packages/apt/build.sh b/packages/apt/build.sh
+--- a/packages/apt/build.sh
++++ b/packages/apt/build.sh
+@@ -76,6 +76,5 @@ termux_step_post_make_install() {
+ 	{
+-		echo "# The main termux repository, with cloudflare cache"
+-		echo "deb https://packages-cf.termux.dev/apt/termux-main/ stable main"
+-		echo "# The main termux repository, without cloudflare cache"
+-		echo "# deb https://packages.termux.dev/apt/termux-main/ stable main"
++		echo "# HyperShell packages are compiled for io.github.hypershell."
++		echo "# Do not enable an official com.termux repository here: its binaries use a different PREFIX."
++		echo "# Add the signed HyperShell repository URL after publishing termux-build/repository."
+ 	} > $TERMUX_PREFIX/etc/apt/sources.list

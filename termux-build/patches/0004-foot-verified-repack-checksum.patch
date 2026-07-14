@@ -1,0 +1,15 @@
+diff --git a/x11-packages/foot/build.sh b/x11-packages/foot/build.sh
+index 739d781..545ad01 100644
+--- a/x11-packages/foot/build.sh
++++ b/x11-packages/foot/build.sh
+@@ -4,7 +4,9 @@ TERMUX_PKG_LICENSE="MIT"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="1.27.0"
+ TERMUX_PKG_SRCURL="https://codeberg.org/dnkl/foot/archive/${TERMUX_PKG_VERSION}.tar.gz"
+-TERMUX_PKG_SHA256=9b9568ec5a9ff728f49c77d73644e7691fe386956e2d9acbdef0fc590e5828c8
++# The Codeberg-generated archive was verified file-for-file against tag commit
++# de998602dbc00c8862a6823d553cbb1df91c676d after an upstream repack.
++TERMUX_PKG_SHA256=f5917cad2d7b723b99873e53d78fd10ea202923d189aed5086591fc53b70b7e3
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_DEPENDS="libandroid-support, fontconfig, freetype, libfcft, libpixman, libwayland, libxkbcommon, utf8proc"
+ TERMUX_PKG_BUILD_DEPENDS="libtllist, libwayland-protocols, libwayland-cross-scanner, scdoc, xdg-utils"

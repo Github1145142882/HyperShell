@@ -1,0 +1,19 @@
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index b9faa50..d274175 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -68,6 +68,14 @@ build_package() {
+ 	local package_name="$2"
+ 
+ 	local build_output
++	local existing_deb
++	existing_deb=$(find "$TERMUX_BUILT_DEBS_DIRECTORY" -maxdepth 1 -type f \
++		\( -name "${package_name}_*_${TERMUX_ARCH}.deb" -o -name "${package_name}_*_all.deb" \) \
++		-print -quit)
++	if [[ -n "$existing_deb" ]]; then
++		echo $'\n\n\n'"[*] Reusing '$package_name' from '$existing_deb'."
++		return 0
++	fi
+ 
+ 	# Build package from source
+ 	# stderr will be redirected to stdout and both will be captured into variable and printed on screen
