@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.hypershell"
         minSdk = 26
         targetSdk = 28
-        versionCode = 22
-        versionName = "1.4.16"
+        versionCode = 25
+        versionName = "1.4.19"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {

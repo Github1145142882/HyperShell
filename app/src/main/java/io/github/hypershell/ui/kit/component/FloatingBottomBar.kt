@@ -21,8 +21,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredHeight
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -196,7 +194,7 @@ fun FloatingBottomBar(
     tabsCount: Int,
     isBlurEnabled: Boolean = true,
     hdrPulseEnabled: Boolean = false,
-    content: @Composable RowScope.(selectedIndex: Int, hdrIntensity: Float) -> Unit
+    content: @Composable RowScope.() -> Unit
 ) {
     val isInDark = isInDarkTheme()
     val pillShape = remember { CircleShape }
@@ -368,7 +366,7 @@ fun FloatingBottomBar(
                 .height(64.dp)
                 .padding(4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            content = { content(currentIndex, selectedPulseIntensity) }
+            content = content
         )
 
         if (isBlurEnabled) {
@@ -401,7 +399,7 @@ fun FloatingBottomBar(
                         .padding(horizontal = 4.dp)
                         .graphicsLayer(colorFilter = ColorFilter.tint(accentColor)),
                     verticalAlignment = Alignment.CenterVertically,
-                    content = { content(currentIndex, selectedPulseIntensity) }
+                    content = content
                 )
             }
         }
@@ -464,10 +462,7 @@ fun FloatingBottomBar(
                                 view.pulseColor = Color.White.toArgb()
                                 view.intensity = selectedPulseIntensity
                             },
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .requiredWidth(tabWidthDp + 32.dp)
-                                .requiredHeight(64.dp),
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
@@ -492,10 +487,7 @@ fun FloatingBottomBar(
                                 view.pulseColor = Color.White.toArgb()
                                 view.intensity = selectedPulseIntensity
                             },
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .requiredWidth(tabWidthDp + 32.dp)
-                                .requiredHeight(64.dp),
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }

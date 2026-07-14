@@ -32,7 +32,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -304,26 +303,13 @@ private fun ShellBottomBar(
             tabsCount = items.size,
             isBlurEnabled = state.settings.floatingBottomBarGlass && state.settings.bottomBarBlur,
             hdrPulseEnabled = state.settings.terminalHdrHighlight && state.settings.floatingBottomBarGlass,
-        ) { selectedIndex, hdrIntensity ->
+        ) {
             items.forEachIndexed { index, item ->
-                val baseColor = MiuixTheme.colorScheme.onSurface
-                val itemColor = if (index == selectedIndex && hdrIntensity > 0.001f) {
-                    val linearBase = baseColor.convert(ColorSpaces.LinearExtendedSrgb)
-                    Color(
-                        red = linearBase.red + (4f - linearBase.red) * hdrIntensity,
-                        green = linearBase.green + (4f - linearBase.green) * hdrIntensity,
-                        blue = linearBase.blue + (4f - linearBase.blue) * hdrIntensity,
-                        alpha = linearBase.alpha,
-                        colorSpace = ColorSpaces.LinearExtendedSrgb,
-                    )
-                } else {
-                    baseColor
-                }
                 FloatingBottomBarItem(
                     onClick = { mainState.animateToPage(index) },
                     modifier = Modifier.defaultMinSize(minWidth = 76.dp),
                 ) {
-                    Icon(item.first, contentDescription = item.second, tint = itemColor)
+                    Icon(item.first, contentDescription = item.second, tint = MiuixTheme.colorScheme.onSurface)
                     Text(
                         item.second,
                         fontSize = 11.sp,
@@ -331,7 +317,7 @@ private fun ShellBottomBar(
                         maxLines = 1,
                         softWrap = false,
                         overflow = TextOverflow.Visible,
-                        color = itemColor,
+                        color = MiuixTheme.colorScheme.onSurface,
                     )
                 }
             }
