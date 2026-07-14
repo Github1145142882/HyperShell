@@ -11,7 +11,10 @@ if [[ $EUID -eq 0 ]]; then
   scripts_dir="$ROOT/third_party/termux-packages/scripts"
   compat_script=$(mktemp "$scripts_dir/setup-ubuntu-hypershell.XXXXXX")
   trap 'rm -f "$compat_script"' EXIT
-  sed 's/python3\.14-venv/python3-venv/g' \
+  sed \
+    -e 's/python3\.14-venv/python3-venv/g' \
+    -e 's#apt\.llvm\.org/resolute#apt.llvm.org/noble#g' \
+    -e 's/llvm-toolchain-resolute-/llvm-toolchain-noble-/g' \
     "$scripts_dir/setup-ubuntu.sh" > "$compat_script"
   bash "$compat_script"
   echo "Ubuntu system dependencies are ready."
