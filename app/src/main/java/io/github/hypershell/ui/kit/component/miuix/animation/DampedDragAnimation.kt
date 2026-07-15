@@ -25,10 +25,12 @@ class DampedDragAnimation(
     val initialScale: Float,
     val pressedScale: Float,
     val canDrag: (Offset) -> Boolean = { true },
+    val onTap: (() -> Unit)? = null,
     val onDragStarted: DampedDragAnimation.(position: Offset) -> Unit,
     val onDragStopped: DampedDragAnimation.() -> Unit,
     val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
 ) {
+    private var gestureTravel = 0f
 
     private val valueAnimationSpec =
         spring(1f, 1000f, visibilityThreshold)
@@ -66,18 +68,22 @@ class DampedDragAnimation(
     val modifier: Modifier = Modifier.pointerInput(Unit) {
         inspectDragGestures(
             onDragStart = { down ->
+                gestureTravel = 0f
                 onDragStarted(down.position)
                 press()
             },
             onDragEnd = {
+                if (gestureTravel < 8f) onTap?.invoke()
                 onDragStopped()
                 release()
             },
             onDragCancel = {
+                if (gestureTravel < 8f) onTap?.invoke()
                 onDragStopped()
                 release()
             }
         ) { change, dragAmount ->
+            gestureTravel += dragAmount.getDistance()
             val position = change.position
             val previousPosition = change.previousPosition
 
@@ -144,4 +150,3 @@ class DampedDragAnimation(
         animationScope.launch { velocityAnimation.animateTo(targetVelocity, velocityAnimationSpec) }
     }
 }
-

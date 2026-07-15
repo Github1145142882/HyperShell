@@ -22,9 +22,8 @@ class SettingsRepository(private val context: Context) {
     }
 
     private fun decode(p: Preferences) = AppSettings(
-        scrollbackLines = p[Keys.scrollbackLines] ?: 2_000,
-        commandHistoryLimit = p[Keys.commandHistoryLimit] ?: 100,
         showHiddenFiles = p[Keys.showHiddenFiles] ?: true,
+        fileLayoutMode = enumValueOrDefault(p[Keys.fileLayoutMode], FileLayoutMode.Dual),
         fileSortMode = enumValueOrDefault(p[Keys.fileSortMode], FileSortMode.Name),
         editorLimit = enumValueOrDefault(p[Keys.editorLimit], EditorLimit.MiB4),
         scriptUseRoot = p[Keys.scriptUseRoot] ?: true,
@@ -32,13 +31,12 @@ class SettingsRepository(private val context: Context) {
         themeSource = enumValueOrDefault(p[Keys.themeSource], ThemeSource.Monet),
         brightnessMode = enumValueOrDefault(p[Keys.brightnessMode], BrightnessMode.System),
         terminalFontSize = (p[Keys.terminalFontSize] ?: 13f).coerceIn(9f, 28f),
-        bottomBarBlur = p[Keys.bottomBarBlur] ?: true,
-        blurRadius = (p[Keys.blurRadius] ?: 20f).coerceIn(0f, 40f),
+        pageTopBarBlur = p[Keys.pageTopBarBlur] ?: p[Keys.bottomBarBlur] ?: true,
         keyColor = p[Keys.keyColor] ?: 0,
         paletteStyle = p[Keys.paletteStyle] ?: "TonalSpot",
         colorSpec = p[Keys.colorSpec] ?: "Spec2021",
-        floatingBottomBar = p[Keys.floatingBottomBar] ?: true,
-        floatingBottomBarGlass = p[Keys.floatingBottomBarGlass] ?: true,
+        bottomBarStyle = decodeBottomBarStyle(p),
+        bottomBarHdrFeedback = p[Keys.bottomBarHdrFeedback] ?: true,
         terminalTopBlur = p[Keys.terminalTopBlur] ?: true,
         keepTerminalInBackground = p[Keys.keepTerminalInBackground] ?: false,
         terminalBackgroundColor = p[Keys.terminalBackgroundColor] ?: 0xFF000000.toInt(),
@@ -52,9 +50,8 @@ class SettingsRepository(private val context: Context) {
     )
 
     private fun encode(p: androidx.datastore.preferences.core.MutablePreferences, s: AppSettings) {
-        p[Keys.scrollbackLines] = s.scrollbackLines
-        p[Keys.commandHistoryLimit] = s.commandHistoryLimit
         p[Keys.showHiddenFiles] = s.showHiddenFiles
+        p[Keys.fileLayoutMode] = s.fileLayoutMode.name
         p[Keys.fileSortMode] = s.fileSortMode.name
         p[Keys.editorLimit] = s.editorLimit.name
         p[Keys.scriptUseRoot] = s.scriptUseRoot
@@ -62,13 +59,12 @@ class SettingsRepository(private val context: Context) {
         p[Keys.themeSource] = s.themeSource.name
         p[Keys.brightnessMode] = s.brightnessMode.name
         p[Keys.terminalFontSize] = s.terminalFontSize
-        p[Keys.bottomBarBlur] = s.bottomBarBlur
-        p[Keys.blurRadius] = s.blurRadius
+        p[Keys.pageTopBarBlur] = s.pageTopBarBlur
         p[Keys.keyColor] = s.keyColor
         p[Keys.paletteStyle] = s.paletteStyle
         p[Keys.colorSpec] = s.colorSpec
-        p[Keys.floatingBottomBar] = s.floatingBottomBar
-        p[Keys.floatingBottomBarGlass] = s.floatingBottomBarGlass
+        p[Keys.bottomBarStyle] = s.bottomBarStyle.name
+        p[Keys.bottomBarHdrFeedback] = s.bottomBarHdrFeedback
         p[Keys.terminalTopBlur] = s.terminalTopBlur
         p[Keys.keepTerminalInBackground] = s.keepTerminalInBackground
         p[Keys.terminalBackgroundColor] = s.terminalBackgroundColor
@@ -86,10 +82,19 @@ class SettingsRepository(private val context: Context) {
     private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String?, default: T): T =
         value?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default
 
+    private fun decodeBottomBarStyle(p: Preferences): BottomBarStyle {
+        return migrateBottomBarStyle(
+            p[Keys.bottomBarStyle],
+            p[Keys.floatingBottomBar] ?: true,
+            p[Keys.floatingBottomBarGlass] ?: true,
+        )
+    }
+
     private object Keys {
         val scrollbackLines = intPreferencesKey("scrollback_lines")
         val commandHistoryLimit = intPreferencesKey("command_history_limit")
         val showHiddenFiles = booleanPreferencesKey("show_hidden_files")
+        val fileLayoutMode = stringPreferencesKey("file_layout_mode")
         val fileSortMode = stringPreferencesKey("file_sort_mode")
         val editorLimit = stringPreferencesKey("editor_limit")
         val scriptUseRoot = booleanPreferencesKey("script_use_root")
@@ -98,12 +103,15 @@ class SettingsRepository(private val context: Context) {
         val brightnessMode = stringPreferencesKey("brightness_mode")
         val terminalFontSize = floatPreferencesKey("terminal_font_size")
         val bottomBarBlur = booleanPreferencesKey("bottom_bar_blur")
+        val pageTopBarBlur = booleanPreferencesKey("page_top_bar_blur")
         val blurRadius = floatPreferencesKey("blur_radius")
         val keyColor = intPreferencesKey("key_color")
         val paletteStyle = stringPreferencesKey("palette_style")
         val colorSpec = stringPreferencesKey("color_spec")
         val floatingBottomBar = booleanPreferencesKey("floating_bottom_bar")
         val floatingBottomBarGlass = booleanPreferencesKey("floating_bottom_bar_glass")
+        val bottomBarStyle = stringPreferencesKey("bottom_bar_style")
+        val bottomBarHdrFeedback = booleanPreferencesKey("bottom_bar_hdr_feedback")
         val terminalTopBlur = booleanPreferencesKey("terminal_top_blur")
         val keepTerminalInBackground = booleanPreferencesKey("keep_terminal_in_background")
         val terminalBackgroundColor = intPreferencesKey("terminal_background_color")
@@ -114,6 +122,15 @@ class SettingsRepository(private val context: Context) {
         val terminalFont = stringPreferencesKey("terminal_font")
         val customTerminalFontPath = stringPreferencesKey("custom_terminal_font_path")
         val bookmarks = stringSetPreferencesKey("bookmarks")
+    }
+}
+
+internal fun migrateBottomBarStyle(stored: String?, floating: Boolean, glass: Boolean): BottomBarStyle {
+    stored?.let { runCatching { enumValueOf<BottomBarStyle>(it) }.getOrNull()?.let { value -> return value } }
+    return when {
+        !floating -> BottomBarStyle.StandardNavigation
+        glass -> BottomBarStyle.LiquidGlass
+        else -> BottomBarStyle.FloatingSolid
     }
 }
 

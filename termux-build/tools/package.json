@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Reproducible HyperShell build helpers",
+  "dependencies": {
+    "tar-stream": "3.1.7"
+  }
+}

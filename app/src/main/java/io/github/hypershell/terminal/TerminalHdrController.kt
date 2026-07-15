@@ -28,8 +28,8 @@ object TerminalHdrController {
         if (Build.VERSION.SDK_INT >= 35) {
             activity.window.desiredHdrHeadroom = if (enabled) headroom else 0f
         }
-        // The floating navigation indicator needs an HDR-capable parent window on every page,
-        // while extended-range terminal glyphs must remain exclusive to the terminal page.
+        // Extended-range glyphs remain exclusive to the settled terminal page even when the
+        // window stays HDR-capable for liquid-glass feedback on the other pages.
         TerminalRenderer.configureHdrText(enabled && terminalTextEnabled, headroom)
         activity.window.decorView.invalidate()
     }

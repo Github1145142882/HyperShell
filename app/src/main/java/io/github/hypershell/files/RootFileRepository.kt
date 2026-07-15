@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.time.Instant
@@ -296,6 +297,159 @@ class RootFileRepository(
         return if (result.successful) FileOperationResult.Success(Unit) else result.failure("chmod 失败")
     }
 
+    suspend fun create(path: String, directory: Boolean): FileOperationResult<Unit> {
+        val normalized = normalizeAbsolutePath(path) ?: return FileOperationResult.Failure("路径必须是绝对路径")
+        val command = if (directory) "mkdir -- ${shellQuote(normalized)}" else "(umask 077; : > ${shellQuote(normalized)})"
+        return runner.runRoot(command).unitResult(if (directory) "新建文件夹失败" else "新建文件失败")
+    }
+
+    suspend fun rename(source: String, destination: String): FileOperationResult<Unit> =
+        when (val result = move(source, destination, ConflictPolicy.Ask)) {
+            is FileOperationResult.Success -> FileOperationResult.Success(Unit)
+            is FileOperationResult.Failure -> result
+        }
+
+    suspend fun copy(source: String, destination: String, policy: ConflictPolicy): FileOperationResult<String> =
+        transfer(source, destination, policy, move = false)
+
+    suspend fun move(source: String, destination: String, policy: ConflictPolicy): FileOperationResult<String> =
+        transfer(source, destination, policy, move = true)
+
+    private suspend fun transfer(
+        source: String,
+        destination: String,
+        policy: ConflictPolicy,
+        move: Boolean,
+    ): FileOperationResult<String> {
+        val from = normalizeAbsolutePath(source) ?: return FileOperationResult.Failure("源路径无效")
+        val requested = normalizeAbsolutePath(destination) ?: return FileOperationResult.Failure("目标路径无效")
+        val target = when (policy) {
+            ConflictPolicy.AutoRename -> uniqueDestination(requested)
+            else -> requested
+        }
+        val exists = runner.runRoot("[ -e ${shellQuote(target)} ] || [ -L ${shellQuote(target)} ]")
+        if (exists.successful) {
+            when (policy) {
+                ConflictPolicy.Ask -> return FileOperationResult.Failure("目标已存在", denied = false)
+                ConflictPolicy.Skip -> return FileOperationResult.Success(target)
+                ConflictPolicy.Overwrite -> Unit
+                ConflictPolicy.AutoRename -> Unit
+            }
+        }
+        val temp = "${target}.hypershell-${System.nanoTime()}"
+        val qFrom = shellQuote(from)
+        val qTarget = shellQuote(target)
+        val qTemp = shellQuote(temp)
+        val cleanup = "rm -rf -- $qTemp"
+        val replace = if (policy == ConflictPolicy.Overwrite) "rm -rf -- $qTarget; " else ""
+        val copyCommand =
+            "set -e; $cleanup; cp -a -- $qFrom $qTemp; " +
+                "[ -e $qTemp ] || [ -L $qTemp ]; $replace mv -- $qTemp $qTarget"
+        val copied = runner.runRoot(copyCommand, timeoutMillis = 10 * 60_000)
+        if (!copied.successful) {
+            runner.runRoot(cleanup)
+            return copied.failure(if (move) "移动复制阶段失败" else "复制失败")
+        }
+        if (move) {
+            val deleted = runner.runRoot("rm -rf -- $qFrom", timeoutMillis = 120_000)
+            if (!deleted.successful) return deleted.failure("目标已写入，但源路径删除失败")
+        }
+        return FileOperationResult.Success(target)
+    }
+
+    private suspend fun uniqueDestination(requested: String): String {
+        val parent = requested.substringBeforeLast('/', "/").ifEmpty { "/" }
+        val name = requested.substringAfterLast('/')
+        val stem = name.substringBeforeLast('.', name)
+        val extension = name.substringAfterLast('.', "").let { if (it.isEmpty() || it == name) "" else ".$it" }
+        for (index in 1..9_999) {
+            val candidate = "$parent/$stem ($index)$extension".replace("//", "/")
+            val exists = runner.runRoot("[ -e ${shellQuote(candidate)} ] || [ -L ${shellQuote(candidate)} ]")
+            if (!exists.successful) return candidate
+        }
+        error("无法生成不冲突的文件名")
+    }
+
+    suspend fun delete(paths: List<String>): FileOperationResult<Unit> {
+        if (paths.isEmpty()) return FileOperationResult.Success(Unit)
+        val normalized = paths.map { normalizeAbsolutePath(it) ?: return FileOperationResult.Failure("路径无效：$it") }
+        if (normalized.any { it == "/" }) return FileOperationResult.Failure("禁止删除根目录")
+        // rm without a trailing slash removes a symbolic link itself and never follows its target.
+        val command = "rm -rf -- " + normalized.joinToString(" ") { shellQuote(it.trimEnd('/')) }
+        return runner.runRoot(command, timeoutMillis = 10 * 60_000).unitResult("永久删除失败")
+    }
+
+    suspend fun chown(path: String, owner: String, group: String, recursive: Boolean = false): FileOperationResult<Unit> {
+        if (!owner.matches(Regex("[A-Za-z0-9_.-]+")) || !group.matches(Regex("[A-Za-z0-9_.-]+"))) {
+            return FileOperationResult.Failure("所有者或组名称无效")
+        }
+        val normalized = normalizeAbsolutePath(path) ?: return FileOperationResult.Failure("路径无效")
+        val option = if (recursive) "-R " else ""
+        return runner.runRoot("chown ${option}${shellQuote("$owner:$group")} -- ${shellQuote(normalized)}")
+            .unitResult("chown 失败")
+    }
+
+    suspend fun archive(paths: List<String>, destination: String, format: String): FileOperationResult<Unit> {
+        if (paths.isEmpty()) return FileOperationResult.Failure("未选择文件")
+        val target = normalizeAbsolutePath(destination) ?: return FileOperationResult.Failure("归档目标无效")
+        val normalized = paths.map { normalizeAbsolutePath(it) ?: return FileOperationResult.Failure("归档源路径无效") }
+        val command = when (format.lowercase()) {
+            "zip" -> "zip -qry -- ${shellQuote(target)} " + normalized.joinToString(" ") { shellQuote(it) }
+            "tar" -> "tar -cf ${shellQuote(target)} -- " + normalized.joinToString(" ") { shellQuote(it) }
+            "tar.gz", "tgz" -> "tar -czf ${shellQuote(target)} -- " + normalized.joinToString(" ") { shellQuote(it) }
+            else -> return FileOperationResult.Failure("不支持的归档格式")
+        }
+        return runner.runRoot(command, timeoutMillis = 10 * 60_000).unitResult("创建归档失败")
+    }
+
+    suspend fun extractArchive(path: String, destination: String): FileOperationResult<Unit> {
+        val source = normalizeAbsolutePath(path) ?: return FileOperationResult.Failure("压缩包路径无效")
+        val target = normalizeAbsolutePath(destination) ?: return FileOperationResult.Failure("解压目标无效")
+        val qSource = shellQuote(source)
+        val listCommand = when {
+            source.endsWith(".zip", true) -> "unzip -Z1 -- $qSource"
+            source.endsWith(".tar", true) || source.endsWith(".tar.gz", true) || source.endsWith(".tgz", true) -> "tar -tf $qSource"
+            else -> return FileOperationResult.Failure("仅支持 ZIP、TAR 和 TAR.GZ")
+        }
+        val listing = runner.runRoot(listCommand, timeoutMillis = 120_000)
+        if (!listing.successful) return listing.failure("无法读取压缩包目录")
+        val unsafe = listing.stdout.toString(Charsets.UTF_8).lineSequence().firstOrNull { !isSafeArchiveEntry(it) }
+        if (unsafe != null) return FileOperationResult.Failure("压缩包包含越界路径：${unsafe.take(120)}")
+        // Shell extractors do not consistently protect against an archive-created symlink that is
+        // followed by another entry below that link. Reject links before writing anything so a
+        // malicious archive cannot escape the staging directory through link traversal.
+        val typeCommand = if (source.endsWith(".zip", true)) {
+            "unzip -Z -l -- $qSource"
+        } else {
+            "tar -tvf $qSource"
+        }
+        val types = runner.runRoot(typeCommand, timeoutMillis = 120_000)
+        if (!types.successful) return types.failure("无法验证压缩包条目类型")
+        val linkedEntry = types.stdout.toString(Charsets.UTF_8).lineSequence()
+            .map(String::trimStart)
+            .firstOrNull { it.startsWith('l') || it.startsWith('h') }
+        if (linkedEntry != null) return FileOperationResult.Failure("为防止路径逃逸，不解压包含链接的归档")
+        val staging = "$target/.hypershell-extract-${System.nanoTime()}"
+        val qStaging = shellQuote(staging)
+        val qTarget = shellQuote(target)
+        val extraction = if (source.endsWith(".zip", true)) {
+            "unzip -q -- $qSource -d $qStaging"
+        } else {
+            "tar -xf $qSource -C $qStaging"
+        }
+        val command = "set -e; rm -rf -- $qStaging; mkdir -p -- $qStaging $qTarget; " +
+            "$extraction; cp -a -- $qStaging/. $qTarget/; rm -rf -- $qStaging"
+        val result = runner.runRoot(command, timeoutMillis = 10 * 60_000)
+        if (!result.successful) runner.runRoot("rm -rf -- $qStaging")
+        return result.unitResult("安全解压失败")
+    }
+
+    suspend fun export(path: String, destination: File): FileOperationResult<Unit> {
+        val normalized = normalizeAbsolutePath(path) ?: return FileOperationResult.Failure("路径无效")
+        val result = runner.runRootToFile("cat -- ${shellQuote(normalized)}", destination)
+        return if (result.successful) FileOperationResult.Success(Unit) else result.failure("导出失败")
+    }
+
     private suspend fun decodeUtf8(bytes: ByteArray): String? = withContext(ioDispatcher) {
         try {
             Charsets.UTF_8.newDecoder()
@@ -393,6 +547,9 @@ class RootFileRepository(
         denied = denied,
     )
 
+    private fun ShellResult.unitResult(prefix: String): FileOperationResult<Unit> =
+        if (successful) FileOperationResult.Success(Unit) else failure(prefix)
+
     companion object {
         fun isShellScript(path: String, prefixText: String?): Boolean {
             if (path.endsWith(".sh", ignoreCase = true)) return true
@@ -412,6 +569,12 @@ class RootFileRepository(
                 }
             }
             return "/" + stack.joinToString("/")
+        }
+
+        fun isSafeArchiveEntry(path: String): Boolean {
+            val normalized = path.replace('\\', '/').trimEnd('/')
+            if (normalized.isBlank() || normalized.startsWith('/')) return false
+            return normalized.split('/').none { it.isEmpty() || it == ".." }
         }
     }
 }

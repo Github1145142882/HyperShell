@@ -6,4 +6,11 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+
+    <style name="Theme.HyperShell.HdrWarmup" parent="Theme.HyperShell">
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

@@ -18,8 +18,8 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class TerminalMode { User, Root }
-enum class TerminalRuntime { Termux, Ubuntu }
-enum class UbuntuBackend { Chroot, Proot }
+enum class TerminalRuntime { Termux, Debian }
+enum class LinuxBackend { Chroot, Proot }
 
 sealed interface TerminalLaunch {
     val mode: TerminalMode
@@ -29,7 +29,7 @@ sealed interface TerminalLaunch {
         override val mode: TerminalMode,
         override val cwd: String,
         val runtime: TerminalRuntime = TerminalRuntime.Termux,
-        val ubuntuBackend: UbuntuBackend = UbuntuBackend.Chroot,
+        val linuxBackend: LinuxBackend = LinuxBackend.Chroot,
     ) : TerminalLaunch
     data class Script(
         val path: String,

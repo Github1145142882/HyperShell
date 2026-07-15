@@ -30,6 +30,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -40,16 +41,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.LayoutDirection
@@ -82,6 +86,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sign
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -194,13 +199,17 @@ fun FloatingBottomBar(
     tabsCount: Int,
     isBlurEnabled: Boolean = true,
     hdrPulseEnabled: Boolean = false,
+    lockedIndex: Int? = null,
+    lockedOnClick: (() -> Unit)? = null,
+    glassContainerColor: Color? = null,
+    vibrancyEnabled: Boolean = true,
     content: @Composable RowScope.() -> Unit
 ) {
     val isInDark = isInDarkTheme()
     val pillShape = remember { CircleShape }
     val accentColor = MiuixTheme.colorScheme.primary
     val surfaceContainer = MiuixTheme.colorScheme.surfaceContainer
-    val containerColor = if (isBlurEnabled) surfaceContainer.copy(0.4f) else surfaceContainer
+    val containerColor = glassContainerColor ?: if (isBlurEnabled) surfaceContainer.copy(0.4f) else surfaceContainer
 
     val tabsBackdrop = rememberLayerBackdrop()
     val density = LocalDensity.current
@@ -209,7 +218,6 @@ fun FloatingBottomBar(
 
     var tabWidthPx by remember { mutableFloatStateOf(0f) }
     var totalWidthPx by remember { mutableFloatStateOf(0f) }
-
     val offsetAnimation = remember { Animatable(0f) }
     val rubberBandPx = with(density) { 4.dp.toPx() }
     val panelOffset by remember(rubberBandPx) {
@@ -255,7 +263,8 @@ fun FloatingBottomBar(
             },
             onDragStarted = {},
             onDragStopped = {
-                val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
+                val targetIndex = lockedIndex?.fastCoerceIn(0, tabsCount - 1)
+                    ?: targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
                 currentIndex = targetIndex
                 animateToValue(targetIndex.toFloat())
                 animationScope.launch {
@@ -282,7 +291,7 @@ fun FloatingBottomBar(
     LaunchedEffect(dampedDragAnimation) {
         snapshotFlow { currentIndex }.drop(1).collectLatest { index ->
             dampedDragAnimation.animateToValue(index.toFloat())
-            onSelected(index)
+            if (lockedIndex == null) onSelected(index)
         }
     }
     val selectedPressed by remember {
@@ -312,7 +321,8 @@ fun FloatingBottomBar(
     val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
     Box(
-        modifier = modifier.width(IntrinsicSize.Min),
+        modifier = modifier
+            .width(IntrinsicSize.Min),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(
@@ -342,7 +352,7 @@ fun FloatingBottomBar(
                             backdrop = backdrop,
                             shape = { pillShape },
                             effects = {
-                                vibrancy()
+                                if (vibrancyEnabled) vibrancy()
                                 blur(4.dp.toPx(), 4.dp.toPx())
                                 lens(
                                     refractionHeight = 24.dp.toPx(),
@@ -363,6 +373,55 @@ fun FloatingBottomBar(
                     }
                 )
                 .then(if (isBlurEnabled) interactiveHighlight.modifier else Modifier)
+                .drawWithContent {
+                    if (hdrPulseEnabled && selectedPulseIntensity > 0.001f && tabWidthPx > 0f) {
+                        val left = if (isLtr) {
+                            4.dp.toPx() + dampedDragAnimation.value * tabWidthPx + panelOffset
+                        } else {
+                            size.width - 4.dp.toPx() -
+                                (dampedDragAnimation.value + 1f) * tabWidthPx + panelOffset
+                        }
+                        val glowHeight = max(96.dp.toPx(), size.height)
+                        val top = (size.height - glowHeight) / 2f
+                        val center = Offset(left + tabWidthPx / 2f, size.height / 2f)
+                        val strong = Color(
+                            red = 4f,
+                            green = 4f,
+                            blue = 4f,
+                            alpha = selectedPulseIntensity * 0.52f,
+                            colorSpace = ColorSpaces.ExtendedSrgb,
+                        )
+                        val soft = Color(
+                            red = 4f,
+                            green = 4f,
+                            blue = 4f,
+                            alpha = selectedPulseIntensity * 0.18f,
+                            colorSpace = ColorSpaces.ExtendedSrgb,
+                        )
+                        val transparent = Color(
+                            red = 0f,
+                            green = 0f,
+                            blue = 0f,
+                            alpha = 0f,
+                            colorSpace = ColorSpaces.ExtendedSrgb,
+                        )
+                        val glow = Brush.radialGradient(
+                            0f to strong,
+                            0.34f to strong,
+                            0.68f to soft,
+                            1f to transparent,
+                            center = center,
+                            radius = max(tabWidthPx, glowHeight) * 0.68f,
+                        )
+                        drawRoundRect(
+                            brush = glow,
+                            topLeft = Offset(left, top),
+                            size = Size(tabWidthPx, glowHeight),
+                            cornerRadius = CornerRadius(glowHeight / 2f),
+                        )
+                    }
+                    drawContent()
+                }
                 .height(64.dp)
                 .padding(4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -385,7 +444,7 @@ fun FloatingBottomBar(
                             backdrop = backdrop,
                             shape = { pillShape },
                             effects = {
-                                vibrancy()
+                                if (vibrancyEnabled) vibrancy()
                                 blur(4.dp.toPx(), 4.dp.toPx())
                                 lens(
                                     refractionHeight = 24.dp.toPx(),
@@ -455,14 +514,15 @@ fun FloatingBottomBar(
                         .height(56.dp)
                         .width(tabWidthDp),
                 ) {
-                    if (hdrPulseEnabled) {
-                        AndroidView(
-                            factory = ::HdrPulseView,
-                            update = { view ->
-                                view.pulseColor = Color.White.toArgb()
-                                view.intensity = selectedPulseIntensity
-                            },
-                            modifier = Modifier.fillMaxSize(),
+                    if (lockedOnClick != null) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = lockedOnClick,
+                                ),
                         )
                     }
                 }
@@ -480,18 +540,20 @@ fun FloatingBottomBar(
                         .height(56.dp)
                         .width(tabWidthDp)
                 ) {
-                    if (hdrPulseEnabled) {
-                        AndroidView(
-                            factory = ::HdrPulseView,
-                            update = { view ->
-                                view.pulseColor = Color.White.toArgb()
-                                view.intensity = selectedPulseIntensity
-                            },
-                            modifier = Modifier.fillMaxSize(),
+                    if (lockedOnClick != null) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = lockedOnClick,
+                                ),
                         )
                     }
                 }
             }
         }
+
     }
 }

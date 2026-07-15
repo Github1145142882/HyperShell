@@ -180,7 +180,7 @@ class TermuxTerminalSession(
                 TerminalMode.User -> listOf(environmentManager.bash.absolutePath, "-l")
                 TerminalMode.Root -> listOf("su", "-c", rootCommand(environmentManager.bash.absolutePath, "-l"))
             }
-            TerminalRuntime.Ubuntu -> environmentManager.ubuntuCommand(launch.ubuntuBackend)
+            TerminalRuntime.Debian -> environmentManager.debianCommand(launch.linuxBackend)
         }
         is TerminalLaunch.Script -> when (launch.mode) {
             TerminalMode.User -> listOf(environmentManager.bash.absolutePath, launch.path)
@@ -255,7 +255,7 @@ class TermuxTerminalSession(
 
     override fun shouldBackButtonBeMappedToEscape() = false
     override fun shouldEnforceCharBasedInput() = true
-    override fun shouldUseCtrlSpaceWorkaround() = true
+    override fun shouldUseCtrlSpaceWorkaround() = false
     override fun isTerminalViewSelected() = terminalView != null
     override fun copyModeChanged(copyMode: Boolean) = Unit
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: CoreSession) = false

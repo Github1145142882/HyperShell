@@ -5,7 +5,8 @@ import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 enum class ThemeSource { Standard, Monet }
 enum class BrightnessMode { System, Light, Dark }
 enum class FileSortMode { Name, Modified, Size }
-enum class TerminalInputMode { CommandEditor, RawPty }
+enum class FileLayoutMode { Single, Dual }
+enum class BottomBarStyle { LiquidGlass, FloatingSolid, StandardNavigation }
 enum class TerminalFont { SystemMono, SansMono, SerifMono, MiSans, Custom }
 enum class EditorLimit(val mebibytes: Int) {
     MiB1(1), MiB4(4), MiB8(8), MiB16(16);
@@ -22,9 +23,8 @@ data class ScriptExecutionOptions(
 )
 
 data class AppSettings(
-    val scrollbackLines: Int = 2_000,
-    val commandHistoryLimit: Int = 100,
     val showHiddenFiles: Boolean = true,
+    val fileLayoutMode: FileLayoutMode = FileLayoutMode.Dual,
     val fileSortMode: FileSortMode = FileSortMode.Name,
     val editorLimit: EditorLimit = EditorLimit.MiB4,
     val scriptUseRoot: Boolean = true,
@@ -32,13 +32,12 @@ data class AppSettings(
     val themeSource: ThemeSource = ThemeSource.Monet,
     val brightnessMode: BrightnessMode = BrightnessMode.System,
     val terminalFontSize: Float = 13f,
-    val bottomBarBlur: Boolean = true,
-    val blurRadius: Float = 20f,
+    val pageTopBarBlur: Boolean = true,
     val keyColor: Int = 0,
     val paletteStyle: String = "TonalSpot",
     val colorSpec: String = "Spec2021",
-    val floatingBottomBar: Boolean = true,
-    val floatingBottomBarGlass: Boolean = true,
+    val bottomBarStyle: BottomBarStyle = BottomBarStyle.LiquidGlass,
+    val bottomBarHdrFeedback: Boolean = true,
     val terminalTopBlur: Boolean = true,
     val keepTerminalInBackground: Boolean = false,
     val terminalBackgroundColor: Int = 0xFF000000.toInt(),

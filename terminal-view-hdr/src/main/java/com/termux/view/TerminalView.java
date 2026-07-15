@@ -305,14 +305,13 @@ public final class TerminalView extends View {
         // and the alternate view was the one selected the last time.
         if (mClient.isTerminalViewSelected()) {
             if (mClient.shouldEnforceCharBasedInput()) {
-                // Some keyboards seems do not reset the internal state on TYPE_NULL.
-                // Affects mostly Samsung stock keyboards.
-                // https://github.com/termux/termux-app/issues/686
-                // However, this is not a valid value as per AOSP since `InputType.TYPE_CLASS_*` is
-                // not set and it logs a warning:
-                // W/InputAttributes: Unexpected input class: inputType=0x00080090 imeOptions=0x02000000
-                // https://cs.android.com/android/platform/superproject/+/android-11.0.0_r40:packages/inputmethods/LatinIME/java/src/com/android/inputmethod/latin/InputAttributes.java;l=79
-                outAttrs.inputType = InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+                // Keep a valid text class so Gboard can switch languages and maintain composing
+                // text (pinyin, kana, emoji and candidate selection). Composing text remains in
+                // this InputConnection and is only forwarded from commitText/finishComposingText.
+                outAttrs.inputType = InputType.TYPE_CLASS_TEXT
+                    | InputType.TYPE_TEXT_VARIATION_NORMAL
+                    | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
             } else {
                 // Using InputType.NULL is the most correct input type and avoids issues with other hacks.
                 //
@@ -330,7 +329,9 @@ public final class TerminalView extends View {
 
         // Note that IME_ACTION_NONE cannot be used as that makes it impossible to input newlines using the on-screen
         // keyboard on Android TV (see https://github.com/termux/termux-app/issues/221).
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN;
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
+            | EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
 
         return new BaseInputConnection(this, true) {
 

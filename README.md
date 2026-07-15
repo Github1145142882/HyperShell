@@ -52,10 +52,14 @@
 
 ## 构建
 
-需要 JDK 17、Android SDK 及 NDK。仓库不会提交生成的 bootstrap、Ubuntu rootfs、APK 和 `.deb` 仓库；重建终端环境前请阅读 [`termux-build/README.md`](termux-build/README.md)。
+需要 JDK 17、Android SDK 及 NDK。Debian 13 ARM64 rootfs 由固定 Docker Official Image OCI digest 生成；仓库不会提交生成的 bootstrap、Debian rootfs、APK 和 `.deb` 仓库。重建终端环境前请阅读 [`termux-build/README.md`](termux-build/README.md)。
 
 ```bash
 ./gradlew :app:assembleDebug
+```
+
+```bash
+./termux-build/scripts/prepare-debian-asset.sh
 ```
 
 Windows：

@@ -9,6 +9,11 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.hypershell.files.FileKind
+import io.github.hypershell.files.FileBrowserState
+import io.github.hypershell.files.FileClipboard
+import io.github.hypershell.files.FileClipboardMode
+import io.github.hypershell.files.FilePaneId
+import io.github.hypershell.files.isCriticalRootPath
 import io.github.hypershell.files.FileOperationResult
 import io.github.hypershell.files.FileProbe
 import io.github.hypershell.files.PermissionRecovery
@@ -26,18 +31,14 @@ import io.github.hypershell.settings.FileSortMode
 import io.github.hypershell.settings.ScriptExecutionOptions
 import io.github.hypershell.settings.ScriptPermission
 import io.github.hypershell.settings.SettingsRepository
-import io.github.hypershell.settings.TerminalInputMode
 import io.github.hypershell.settings.TerminalFont
-import io.github.hypershell.terminal.TerminalBuffer
-import io.github.hypershell.terminal.TerminalEvent
 import io.github.hypershell.terminal.TerminalLaunch
 import io.github.hypershell.terminal.TerminalMode
 import io.github.hypershell.terminal.TerminalRuntime
-import io.github.hypershell.terminal.UbuntuBackend
+import io.github.hypershell.terminal.LinuxBackend
 import io.github.hypershell.terminal.TermuxEnvironmentManager
 import io.github.hypershell.terminal.TermuxEnvironmentStatus
 import io.github.hypershell.terminal.TerminalSession
-import io.github.hypershell.terminal.TerminalSnapshot
 import io.github.hypershell.terminal.TerminalStatus
 import io.github.hypershell.terminal.TermuxTerminalSession
 import com.termux.view.TerminalView
@@ -55,6 +56,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -64,7 +67,9 @@ enum class AppPage { Terminal, Files, Settings, Appearance }
 sealed interface Confirmation {
     data class SaveFile(val path: String) : Confirmation
     data class ExtractZip(val name: String, val destination: String) : Confirmation
-    data class UbuntuProotFallback(val reason: String) : Confirmation
+    data class DeleteFiles(val paths: List<String>, val critical: Boolean, val secondStep: Boolean = false) : Confirmation
+    data class DebianProotFallback(val reason: String) : Confirmation
+    data object MigrateUbuntuToDebian : Confirmation
     data class DisableUnsupportedHdr(val reason: String) : Confirmation
 }
 
@@ -74,21 +79,27 @@ data class FileActionState(
     val options: ScriptExecutionOptions,
 )
 
+private data class ActivePaneProjection(
+    val id: FilePaneId,
+    val path: String,
+    val entries: List<RootFileEntry>,
+    val searchQuery: String,
+    val loading: Boolean,
+)
+
 data class HyperShellUiState(
     val page: AppPage = AppPage.Terminal,
     val settings: AppSettings = AppSettings(),
     val terminalStatus: TerminalStatus = TerminalStatus.Idle,
-    val terminalSnapshot: TerminalSnapshot = TerminalBuffer().snapshot(),
-    val terminalInput: String = "",
-    val terminalInputMode: TerminalInputMode = TerminalInputMode.CommandEditor,
     val terminalRuntime: TerminalRuntime = TerminalRuntime.Termux,
-    val ubuntuBackend: UbuntuBackend = UbuntuBackend.Chroot,
+    val linuxBackend: LinuxBackend = LinuxBackend.Chroot,
     val termuxEnvironmentStatus: TermuxEnvironmentStatus = TermuxEnvironmentStatus.Checking,
     val rootAccess: RootAccess = RootAccess.Unknown,
-    val currentPath: String = "/",
+    val currentPath: String = "/storage/emulated/0",
     val entries: List<RootFileEntry> = emptyList(),
     val searchQuery: String = "",
     val filesLoading: Boolean = false,
+    val fileBrowser: FileBrowserState = FileBrowserState(),
     val fileAction: FileActionState? = null,
     val document: TextDocument? = null,
     val documentReadOnly: Boolean = false,
@@ -123,20 +134,21 @@ class HyperShellViewModel @JvmOverloads constructor(
     private val settingsRepository = SettingsRepository(application)
     private val recoveryJournal = PermissionRecoveryJournal(application, ioDispatcher)
     private val zipRepository = ZipRepository(application, ioDispatcher = ioDispatcher)
-    private val terminalBuffer = TerminalBuffer()
     private val terminalSession = terminalSessionFactory(viewModelScope)
-    private val _uiState = MutableStateFlow(HyperShellUiState(terminalSnapshot = terminalBuffer.snapshot()))
+    private val _uiState = MutableStateFlow(HyperShellUiState())
     val uiState: StateFlow<HyperShellUiState> = _uiState.asStateFlow()
     private val _events = MutableSharedFlow<HyperShellEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<HyperShellEvent> = _events.asSharedFlow()
 
-    private val commandHistory = ArrayDeque<String>()
-    private var historyIndex: Int? = null
-    private var historyDraft = ""
     private var appForeground = true
     private var rootAuthorizationDeadline = 0L
     private var backgroundTerminationJob: Job? = null
     private var fileOperationJob: Job? = null
+    private val paneDirectoryJobs = mutableMapOf<FilePaneId, Job>()
+    private val paneEntries = mutableMapOf<FilePaneId, List<RootFileEntry>>(
+        FilePaneId.Left to emptyList(),
+        FilePaneId.Right to emptyList(),
+    )
     private var fileFilterJob: Job? = null
     private var scriptExecutionJob: Job? = null
     private var pendingZipExtraction: ZipItem? = null
@@ -150,10 +162,19 @@ class HyperShellViewModel @JvmOverloads constructor(
         cleanupSessionCache()
         viewModelScope.launch {
             settingsRepository.settings.collect { settings ->
-                terminalBuffer.setMaxScrollback(settings.scrollbackLines)
-                trimHistory(settings.commandHistoryLimit)
                 _uiState.update { state ->
-                    state.copy(settings = settings, entries = filterAndSort(allEntries, state.searchQuery, settings))
+                    val browser = FilePaneId.entries.fold(state.fileBrowser) { current, id ->
+                        current.updatePane(id) { pane ->
+                            pane.copy(entries = filterAndSort(paneEntries[id].orEmpty(), pane.searchQuery, settings))
+                        }
+                    }
+                    val active = browser.pane(browser.activePane)
+                    state.copy(
+                        settings = settings,
+                        fileBrowser = browser,
+                        entries = active.entries,
+                        searchQuery = active.searchQuery,
+                    )
                 }
                 (terminalSession as? TermuxTerminalSession)?.updateAppearance(
                     settings.terminalBackgroundColor,
@@ -164,19 +185,33 @@ class HyperShellViewModel @JvmOverloads constructor(
             }
         }
         viewModelScope.launch {
+            uiState.map { state ->
+                ActivePaneProjection(
+                    state.fileBrowser.activePane,
+                    state.currentPath,
+                    state.entries,
+                    state.searchQuery,
+                    state.filesLoading,
+                )
+            }.distinctUntilChanged().collect { projection ->
+                _uiState.update { state ->
+                    state.copy(fileBrowser = state.fileBrowser.updatePane(projection.id) { pane ->
+                        pane.copy(
+                            path = projection.path,
+                            entries = projection.entries,
+                            searchQuery = projection.searchQuery,
+                            loading = projection.loading,
+                        )
+                    })
+                }
+            }
+        }
+        viewModelScope.launch {
             terminalSession.status.collect { status -> _uiState.update { it.copy(terminalStatus = status) } }
         }
         viewModelScope.launch {
             termuxEnvironment.status.collect { status ->
                 _uiState.update { it.copy(termuxEnvironmentStatus = status) }
-            }
-        }
-        viewModelScope.launch {
-            terminalSession.events.collect { event ->
-                if (event is TerminalEvent.Output) {
-                    val snapshot = withContext(computationDispatcher) { terminalBuffer.accept(event.bytes) }
-                    _uiState.update { it.copy(terminalSnapshot = snapshot) }
-                }
             }
         }
         viewModelScope.launch(ioDispatcher) { restoreInterruptedPermissionChange() }
@@ -205,20 +240,24 @@ class HyperShellViewModel @JvmOverloads constructor(
 
     fun toggleTerminalRuntime() {
         val target = if (_uiState.value.terminalRuntime == TerminalRuntime.Termux) {
-            TerminalRuntime.Ubuntu
+            TerminalRuntime.Debian
         } else {
             TerminalRuntime.Termux
         }
         viewModelScope.launch {
-            if (target == TerminalRuntime.Ubuntu) {
-                message("正在准备 Ubuntu chroot 环境…")
-                termuxEnvironment.ensureUbuntuInstalled(requireProot = false).getOrElse { error ->
-                    message(error.message ?: "Ubuntu 环境不可用")
+            if (target == TerminalRuntime.Debian) {
+                if (termuxEnvironment.hasLegacyUbuntu()) {
+                    _uiState.update { it.copy(confirmation = Confirmation.MigrateUbuntuToDebian) }
+                    return@launch
+                }
+                message("正在准备 Debian 13 chroot 环境…")
+                termuxEnvironment.ensureDebianInstalled(requireProot = false).getOrElse { error ->
+                    message(error.message ?: "Debian 环境不可用")
                     return@launch
                 }
                 termuxEnvironment.checkChrootSupport().onFailure { error ->
                     _uiState.update {
-                        it.copy(confirmation = Confirmation.UbuntuProotFallback(error.message ?: "Root chroot 不可用"))
+                        it.copy(confirmation = Confirmation.DebianProotFallback(error.message ?: "Root chroot 不可用"))
                     }
                     return@launch
                 }
@@ -229,13 +268,13 @@ class HyperShellViewModel @JvmOverloads constructor(
                 }
             }
             terminalSession.terminate()
-            _uiState.update { it.copy(terminalRuntime = target, ubuntuBackend = UbuntuBackend.Chroot) }
+            _uiState.update { it.copy(terminalRuntime = target, linuxBackend = LinuxBackend.Chroot) }
             terminalSession.start(
                 TerminalLaunch.Interactive(
                     TerminalMode.User,
                     termuxEnvironment.home.absolutePath,
                     target,
-                    UbuntuBackend.Chroot,
+                    LinuxBackend.Chroot,
                 ),
             )
         }
@@ -289,45 +328,6 @@ class HyperShellViewModel @JvmOverloads constructor(
         viewModelScope.launch { terminalSession.terminate() }
     }
 
-    fun setTerminalInputMode(mode: TerminalInputMode) {
-        _uiState.update { it.copy(terminalInputMode = mode) }
-    }
-
-    fun setTerminalInput(value: String) {
-        historyIndex = null
-        _uiState.update { it.copy(terminalInput = value) }
-    }
-
-    fun sendTerminalInput() {
-        val input = _uiState.value.terminalInput
-        if (input.isBlank()) return
-        rememberCommand(input)
-        historyIndex = null
-        _uiState.update { it.copy(terminalInput = "") }
-        writeTerminal((input + "\n").toByteArray())
-    }
-
-    fun previousCommand() {
-        if (commandHistory.isEmpty()) return
-        val next = if (historyIndex == null) {
-            historyDraft = _uiState.value.terminalInput
-            commandHistory.lastIndex
-        } else (historyIndex!! - 1).coerceAtLeast(0)
-        historyIndex = next
-        _uiState.update { it.copy(terminalInput = commandHistory.elementAt(next)) }
-    }
-
-    fun nextCommand() {
-        val index = historyIndex ?: return
-        if (index >= commandHistory.lastIndex) {
-            historyIndex = null
-            _uiState.update { it.copy(terminalInput = historyDraft) }
-        } else {
-            historyIndex = index + 1
-            _uiState.update { it.copy(terminalInput = commandHistory.elementAt(index + 1)) }
-        }
-    }
-
     fun sendRawInput(value: String) {
         if (value.isNotEmpty()) writeTerminal(value.toByteArray())
     }
@@ -340,8 +340,6 @@ class HyperShellViewModel @JvmOverloads constructor(
 
     fun resizeTerminal(rows: Int, columns: Int) {
         if (rows <= 0 || columns <= 0) return
-        terminalBuffer.resize(rows, columns)
-        _uiState.update { it.copy(terminalSnapshot = terminalBuffer.snapshot()) }
         viewModelScope.launch { terminalSession.resize(rows, columns) }
     }
 
@@ -357,9 +355,21 @@ class HyperShellViewModel @JvmOverloads constructor(
                 dismissConfirmation()
                 extractPendingZipItem()
             }
-            is Confirmation.UbuntuProotFallback -> {
+            is Confirmation.DeleteFiles -> {
+                if (confirmation.critical && !confirmation.secondStep) {
+                    _uiState.update { it.copy(confirmation = confirmation.copy(secondStep = true)) }
+                } else {
+                    dismissConfirmation()
+                    deleteFiles(confirmation.paths)
+                }
+            }
+            is Confirmation.DebianProotFallback -> {
                 dismissConfirmation()
-                startUbuntuProotFallback()
+                startDebianProotFallback()
+            }
+            Confirmation.MigrateUbuntuToDebian -> {
+                dismissConfirmation()
+                migrateUbuntuToDebian()
             }
             is Confirmation.DisableUnsupportedHdr -> {
                 dismissConfirmation()
@@ -391,25 +401,235 @@ class HyperShellViewModel @JvmOverloads constructor(
         }
     }
 
-    fun loadDirectory(path: String) {
-        if (_uiState.value.rootAccess != RootAccess.Granted) return
-        val normalized = RootFileRepository.normalizeAbsolutePath(path) ?: return message("请输入绝对路径")
-        val previousPath = _uiState.value.currentPath
-        val previousEntries = allEntries
-        val cached = directoryCache[normalized]
+    fun activateFilePane(id: FilePaneId) {
+        val state = _uiState.value
+        if (state.fileBrowser.activePane == id) return
+        val pane = state.fileBrowser.pane(id)
+        allEntries = directoryCache[pane.path] ?: pane.entries
+        _uiState.update {
+            it.copy(
+                fileBrowser = it.fileBrowser.copy(activePane = id),
+                currentPath = pane.path,
+                entries = pane.entries,
+                searchQuery = pane.searchQuery,
+                filesLoading = pane.loading,
+            )
+        }
+        if (pane.entries.isEmpty() && state.rootAccess == RootAccess.Granted) loadDirectory(pane.path, recordHistory = false)
+    }
+
+    fun setFileSplitFraction(value: Float) = _uiState.update {
+        it.copy(fileBrowser = it.fileBrowser.copy(splitFraction = value.coerceIn(0.35f, 0.65f)))
+    }
+
+    fun synchronizeFilePanes() {
+        val browser = _uiState.value.fileBrowser
+        val source = browser.activePane
+        val target = if (source == FilePaneId.Left) FilePaneId.Right else FilePaneId.Left
+        val path = browser.pane(source).path
+        activateFilePane(target)
+        loadDirectory(path)
+        activateFilePane(source)
+    }
+
+    fun setPaneSearchQuery(id: FilePaneId, value: String) {
+        val raw = paneEntries[id].orEmpty()
+        _uiState.update { state ->
+            val visible = filterAndSort(raw, value, state.settings)
+            val browser = state.fileBrowser.copy(activePane = id).updatePane(id) { pane ->
+                pane.copy(searchQuery = value, entries = visible)
+            }
+            state.copy(
+                fileBrowser = browser,
+                currentPath = browser.pane(id).path,
+                entries = visible,
+                searchQuery = value,
+                filesLoading = browser.pane(id).loading,
+            )
+        }
+    }
+
+    fun jumpToPath(id: FilePaneId, path: String) {
+        activateFilePane(id)
+        jumpToPath(path)
+    }
+
+    fun navigatePaneUp(id: FilePaneId) {
+        activateFilePane(id)
+        navigateUp()
+    }
+
+    fun navigatePaneBack(id: FilePaneId) {
+        val state = _uiState.value
+        val pane = state.fileBrowser.pane(id)
+        val target = pane.backStack.lastOrNull() ?: return
+        activateFilePane(id)
+        _uiState.update {
+            it.copy(fileBrowser = it.fileBrowser.updatePane(id) { current ->
+                current.copy(backStack = current.backStack.dropLast(1), forwardStack = current.forwardStack + current.path)
+            })
+        }
+        loadDirectory(target, recordHistory = false)
+    }
+
+    fun navigatePaneForward(id: FilePaneId) {
+        val state = _uiState.value
+        val pane = state.fileBrowser.pane(id)
+        val target = pane.forwardStack.lastOrNull() ?: return
+        activateFilePane(id)
+        _uiState.update {
+            it.copy(fileBrowser = it.fileBrowser.updatePane(id) { current ->
+                current.copy(forwardStack = current.forwardStack.dropLast(1), backStack = current.backStack + current.path)
+            })
+        }
+        loadDirectory(target, recordHistory = false)
+    }
+
+    fun toggleFileSelection(id: FilePaneId, path: String) {
+        _uiState.update {
+            it.copy(fileBrowser = it.fileBrowser.copy(activePane = id).updatePane(id) { pane ->
+                pane.copy(selectedPaths = if (path in pane.selectedPaths) pane.selectedPaths - path else pane.selectedPaths + path)
+            })
+        }
+    }
+
+    fun selectAllFiles(id: FilePaneId) = _uiState.update {
+        it.copy(fileBrowser = it.fileBrowser.updatePane(id) { pane -> pane.copy(selectedPaths = pane.entries.mapTo(mutableSetOf()) { entry -> entry.path }) })
+    }
+
+    fun invertFileSelection(id: FilePaneId) = _uiState.update {
+        it.copy(fileBrowser = it.fileBrowser.updatePane(id) { pane ->
+            val all = pane.entries.mapTo(mutableSetOf()) { entry -> entry.path }
+            pane.copy(selectedPaths = all - pane.selectedPaths)
+        })
+    }
+
+    fun stageSelectedFiles(id: FilePaneId, move: Boolean) {
+        val pane = _uiState.value.fileBrowser.pane(id)
+        if (pane.selectedPaths.isEmpty()) return message("请先选择文件")
+        _uiState.update {
+            it.copy(fileBrowser = it.fileBrowser.copy(
+                clipboard = FileClipboard(pane.selectedPaths.toList(), if (move) FileClipboardMode.Move else FileClipboardMode.Copy),
+            ).updatePane(id) { current -> current.copy(selectedPaths = emptySet()) })
+        }
+        message(if (move) "已剪切 ${pane.selectedPaths.size} 项" else "已复制 ${pane.selectedPaths.size} 项")
+    }
+
+    fun pasteIntoPane(id: FilePaneId) {
+        val browser = _uiState.value.fileBrowser
+        val clipboard = browser.clipboard ?: return message("剪贴板为空")
+        val destination = browser.pane(id).path
+        fileOperationJob?.cancel()
+        paneDirectoryJobs.values.forEach(Job::cancel)
+        fileOperationJob = viewModelScope.launch {
+            val errors = mutableListOf<String>()
+            clipboard.paths.forEach { source ->
+                val target = "$destination/${source.substringAfterLast('/')}".replace("//", "/")
+                val result = if (clipboard.mode == FileClipboardMode.Move) {
+                    fileRepository.move(source, target, io.github.hypershell.files.ConflictPolicy.AutoRename)
+                } else {
+                    fileRepository.copy(source, target, io.github.hypershell.files.ConflictPolicy.AutoRename)
+                }
+                if (result is FileOperationResult.Failure) errors += "${source.substringAfterLast('/')}: ${result.message}"
+            }
+            if (clipboard.mode == FileClipboardMode.Move && errors.isEmpty()) {
+                _uiState.update { it.copy(fileBrowser = it.fileBrowser.copy(clipboard = null)) }
+            }
+            activateFilePane(id)
+            loadDirectory(destination, recordHistory = false)
+            message(if (errors.isEmpty()) "操作完成" else "完成，但有 ${errors.size} 项失败")
+        }
+    }
+
+    fun createInPane(id: FilePaneId, name: String, directory: Boolean) {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty() || cleanName == "." || cleanName == ".." || '/' in cleanName || '\u0000' in cleanName) {
+            return message("名称无效")
+        }
+        val pane = _uiState.value.fileBrowser.pane(id)
+        val target = "${pane.path}/$cleanName".replace("//", "/")
+        fileOperationJob = viewModelScope.launch {
+            when (val result = fileRepository.create(target, directory)) {
+                is FileOperationResult.Success -> {
+                    activateFilePane(id)
+                    loadDirectory(pane.path, recordHistory = false)
+                }
+                is FileOperationResult.Failure -> message(result.message)
+            }
+        }
+    }
+
+    fun archiveSelected(id: FilePaneId, name: String, format: String) {
+        val pane = _uiState.value.fileBrowser.pane(id)
+        if (pane.selectedPaths.isEmpty()) return message("请先选择文件")
+        val clean = name.trim()
+        if (clean.isEmpty() || clean == "." || clean == ".." || '/' in clean || '\u0000' in clean) {
+            return message("归档名称无效")
+        }
+        val suffix = when (format.lowercase()) {
+            "zip" -> ".zip"
+            "tar.gz", "tgz" -> ".tar.gz"
+            else -> return message("不支持的归档格式")
+        }
+        val fileName = if (clean.endsWith(suffix, ignoreCase = true)) clean else clean + suffix
+        val destination = "${pane.path}/$fileName".replace("//", "/")
         fileOperationJob?.cancel()
         fileOperationJob = viewModelScope.launch {
-            if (cached != null) allEntries = cached
-            _uiState.update {
-                it.copy(
-                    currentPath = normalized,
-                    entries = filterAndSort(cached.orEmpty(), it.searchQuery, it.settings),
-                    filesLoading = true,
-                    document = null,
-                    textPage = null,
-                    editorText = "",
-                )
+            when (val result = fileRepository.archive(pane.selectedPaths.toList(), destination, format)) {
+                is FileOperationResult.Success -> {
+                    _uiState.update {
+                        it.copy(fileBrowser = it.fileBrowser.updatePane(id) { current -> current.copy(selectedPaths = emptySet()) })
+                    }
+                    activateFilePane(id)
+                    loadDirectory(pane.path, recordHistory = false)
+                    message("已创建 $fileName")
+                }
+                is FileOperationResult.Failure -> message(result.message)
             }
+        }
+    }
+
+    fun requestDeleteSelected(id: FilePaneId) {
+        val paths = _uiState.value.fileBrowser.pane(id).selectedPaths.toList()
+        if (paths.isEmpty()) return message("请先选择文件")
+        val critical = paths.any(::isCriticalRootPath)
+        _uiState.update { it.copy(confirmation = Confirmation.DeleteFiles(paths, critical)) }
+    }
+
+    private fun deleteFiles(paths: List<String>) {
+        val active = _uiState.value.fileBrowser.activePane
+        val panePath = _uiState.value.fileBrowser.pane(active).path
+        fileOperationJob = viewModelScope.launch {
+            when (val result = fileRepository.delete(paths)) {
+                is FileOperationResult.Success -> {
+                    _uiState.update { it.copy(fileBrowser = it.fileBrowser.updatePane(active) { pane -> pane.copy(selectedPaths = emptySet()) }) }
+                    loadDirectory(panePath, recordHistory = false)
+                    message("已永久删除 ${paths.size} 项")
+                }
+                is FileOperationResult.Failure -> message(result.message)
+            }
+        }
+    }
+
+
+    fun loadDirectory(path: String, recordHistory: Boolean = true) {
+        if (_uiState.value.rootAccess != RootAccess.Granted) return
+        val normalized = RootFileRepository.normalizeAbsolutePath(path) ?: return message("请输入绝对路径")
+        val paneId = _uiState.value.fileBrowser.activePane
+        val previousPane = _uiState.value.fileBrowser.pane(paneId)
+        val previousEntries = paneEntries[paneId].orEmpty()
+        val cached = directoryCache[normalized]
+        paneDirectoryJobs.remove(paneId)?.cancel()
+        if (recordHistory && normalized != previousPane.path) {
+            _uiState.update {
+                it.copy(fileBrowser = it.fileBrowser.updatePane(paneId) { pane ->
+                    pane.copy(backStack = pane.backStack + previousPane.path, forwardStack = emptyList())
+                })
+            }
+        }
+        val job = viewModelScope.launch {
+            if (cached != null) paneEntries[paneId] = cached
+            publishPane(paneId, normalized, cached.orEmpty(), loading = true, resetEditor = true)
             val discovered = mutableListOf<RootFileEntry>()
             var receivedEntry = false
             var lastPublishedAt = 0L
@@ -419,21 +639,13 @@ class HyperShellViewModel @JvmOverloads constructor(
                 lastPublishedAt = now
                 val snapshot = discovered.toList()
                 withContext(Dispatchers.Main.immediate) {
-                    if (_uiState.value.currentPath != normalized) throw CancellationException()
-                    allEntries = snapshot
-                    val currentState = _uiState.value
-                    val visibleEntries = snapshot.filter {
-                        isVisible(it, currentState.searchQuery, currentState.settings)
-                    }
-                    _uiState.update { state ->
-                        if (state.currentPath == normalized) {
-                            state.copy(entries = visibleEntries, filesLoading = true)
-                        } else state
-                    }
+                    if (_uiState.value.fileBrowser.pane(paneId).path != normalized) throw CancellationException()
+                    paneEntries[paneId] = snapshot
+                    publishPane(paneId, normalized, snapshot, loading = true)
                 }
             }
             when (val result = fileRepository.listStreaming(normalized) { entry ->
-                if (_uiState.value.currentPath != normalized) throw CancellationException()
+                if (_uiState.value.fileBrowser.pane(paneId).path != normalized) throw CancellationException()
                 if (!receivedEntry) {
                     receivedEntry = true
                     discovered.clear()
@@ -442,47 +654,60 @@ class HyperShellViewModel @JvmOverloads constructor(
                 publishDiscovered()
             }) {
                 is FileOperationResult.Success -> {
-                    if (receivedEntry) publishDiscovered(force = true) else allEntries = emptyList()
-                    directoryCache[normalized] = allEntries
-                    val currentState = _uiState.value
-                    val visibleEntries = withContext(computationDispatcher) {
-                        filterAndSort(allEntries, currentState.searchQuery, currentState.settings)
-                    }
-                    _uiState.update {
-                        it.copy(
-                            currentPath = normalized,
-                            entries = visibleEntries,
-                            filesLoading = false,
-                        )
-                    }
+                    if (receivedEntry) publishDiscovered(force = true) else paneEntries[paneId] = emptyList()
+                    directoryCache[normalized] = paneEntries[paneId].orEmpty()
+                    publishPane(paneId, normalized, paneEntries[paneId].orEmpty(), loading = false)
                     when (val detailed = fileRepository.listDetailed(normalized)) {
                         is FileOperationResult.Success -> {
-                            if (_uiState.value.currentPath != normalized) return@launch
-                            allEntries = detailed.value
+                            if (_uiState.value.fileBrowser.pane(paneId).path != normalized) return@launch
+                            paneEntries[paneId] = detailed.value
                             directoryCache[normalized] = detailed.value
-                            val refreshedState = _uiState.value
-                            val detailedEntries = withContext(computationDispatcher) {
-                                filterAndSort(detailed.value, refreshedState.searchQuery, refreshedState.settings)
-                            }
-                            _uiState.update { state ->
-                                if (state.currentPath == normalized) state.copy(entries = detailedEntries) else state
-                            }
+                            publishPane(paneId, normalized, detailed.value, loading = false, incrementGeneration = true)
                         }
                         is FileOperationResult.Failure -> Unit
                     }
                 }
                 is FileOperationResult.Failure -> {
-                    allEntries = previousEntries
-                    _uiState.update {
-                        it.copy(
-                            currentPath = previousPath,
-                            entries = filterAndSort(previousEntries, it.searchQuery, it.settings),
-                            filesLoading = false,
-                        )
-                    }
+                    paneEntries[paneId] = previousEntries
+                    publishPane(paneId, previousPane.path, previousEntries, loading = false)
                     message(result.message)
                 }
             }
+        }
+        paneDirectoryJobs[paneId] = job
+    }
+
+    private fun publishPane(
+        id: FilePaneId,
+        path: String,
+        rawEntries: List<RootFileEntry>,
+        loading: Boolean,
+        resetEditor: Boolean = false,
+        incrementGeneration: Boolean = false,
+    ) {
+        _uiState.update { state ->
+            val query = state.fileBrowser.pane(id).searchQuery
+            val visible = filterAndSort(rawEntries, query, state.settings)
+            val browser = state.fileBrowser.updatePane(id) { pane ->
+                pane.copy(
+                    path = path,
+                    entries = visible,
+                    loading = loading,
+                    generation = if (incrementGeneration) pane.generation + 1 else pane.generation,
+                )
+            }
+            if (browser.activePane == id) {
+                state.copy(
+                    fileBrowser = browser,
+                    currentPath = path,
+                    entries = visible,
+                    searchQuery = query,
+                    filesLoading = loading,
+                    document = if (resetEditor) null else state.document,
+                    textPage = if (resetEditor) null else state.textPage,
+                    editorText = if (resetEditor) "" else state.editorText,
+                )
+            } else state.copy(fileBrowser = browser)
         }
     }
 
@@ -544,6 +769,53 @@ class HyperShellViewModel @JvmOverloads constructor(
 
     fun copySelectedPath() {
         _uiState.value.fileAction?.entry?.path?.let { _events.tryEmit(HyperShellEvent.CopyPath(it)) }
+    }
+
+    fun renameSelectedFile(newName: String) {
+        val action = _uiState.value.fileAction ?: return
+        val clean = newName.trim()
+        if (clean.isEmpty() || '/' in clean || clean == "." || clean == "..") return message("名称无效")
+        val parent = action.entry.path.substringBeforeLast('/', "/").ifEmpty { "/" }
+        val target = "$parent/$clean".replace("//", "/")
+        dismissFileAction()
+        fileOperationJob = viewModelScope.launch {
+            when (val result = fileRepository.rename(action.entry.path, target)) {
+                is FileOperationResult.Success -> loadDirectory(parent, recordHistory = false)
+                is FileOperationResult.Failure -> message(result.message)
+            }
+        }
+    }
+
+    fun chmodSelectedFile(mode: String) {
+        val action = _uiState.value.fileAction ?: return
+        fileOperationJob = viewModelScope.launch {
+            when (val result = fileRepository.chmod(action.entry.path, mode)) {
+                is FileOperationResult.Success -> {
+                    dismissFileAction()
+                    loadDirectory(_uiState.value.currentPath, recordHistory = false)
+                }
+                is FileOperationResult.Failure -> message(result.message)
+            }
+        }
+    }
+
+    fun chownSelectedFile(owner: String, group: String) {
+        val action = _uiState.value.fileAction ?: return
+        fileOperationJob = viewModelScope.launch {
+            when (val result = fileRepository.chown(action.entry.path, owner, group)) {
+                is FileOperationResult.Success -> {
+                    dismissFileAction()
+                    loadDirectory(_uiState.value.currentPath, recordHistory = false)
+                }
+                is FileOperationResult.Failure -> message(result.message)
+            }
+        }
+    }
+
+    fun requestDeleteSelectedFile() {
+        val path = _uiState.value.fileAction?.entry?.path ?: return
+        dismissFileAction()
+        _uiState.update { it.copy(confirmation = Confirmation.DeleteFiles(listOf(path), isCriticalRootPath(path))) }
     }
 
     fun toggleBookmark(path: String) {
@@ -678,6 +950,7 @@ class HyperShellViewModel @JvmOverloads constructor(
             }
         }
         fileOperationJob?.cancel()
+        paneDirectoryJobs.values.forEach(Job::cancel)
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
@@ -686,9 +959,7 @@ class HyperShellViewModel @JvmOverloads constructor(
 
     private fun startTerminal(mode: TerminalMode) {
         scriptExecutionJob?.cancel()
-        clearCommandHistory()
-        terminalBuffer.clear()
-        _uiState.update { it.copy(terminalSnapshot = terminalBuffer.snapshot(), page = AppPage.Terminal) }
+        _uiState.update { it.copy(page = AppPage.Terminal) }
         viewModelScope.launch {
             val installed = termuxEnvironment.ensureInstalled()
             if (installed.isFailure) {
@@ -696,16 +967,16 @@ class HyperShellViewModel @JvmOverloads constructor(
                 return@launch
             }
             val runtime = _uiState.value.terminalRuntime
-            if (runtime == TerminalRuntime.Ubuntu) {
-                val backend = _uiState.value.ubuntuBackend
-                termuxEnvironment.ensureUbuntuInstalled(requireProot = backend == UbuntuBackend.Proot).getOrElse { error ->
-                    message(error.message ?: "Ubuntu 环境不可用")
+            if (runtime == TerminalRuntime.Debian) {
+                val backend = _uiState.value.linuxBackend
+                termuxEnvironment.ensureDebianInstalled(requireProot = backend == LinuxBackend.Proot).getOrElse { error ->
+                    message(error.message ?: "Debian 环境不可用")
                     return@launch
                 }
-                if (backend == UbuntuBackend.Chroot) {
+                if (backend == LinuxBackend.Chroot) {
                     termuxEnvironment.checkChrootSupport().onFailure { error ->
                         _uiState.update {
-                            it.copy(confirmation = Confirmation.UbuntuProotFallback(error.message ?: "Root chroot 不可用"))
+                            it.copy(confirmation = Confirmation.DebianProotFallback(error.message ?: "Root chroot 不可用"))
                         }
                         return@launch
                     }
@@ -716,35 +987,48 @@ class HyperShellViewModel @JvmOverloads constructor(
                     mode,
                     termuxEnvironment.home.absolutePath,
                     runtime,
-                    _uiState.value.ubuntuBackend,
+                    _uiState.value.linuxBackend,
                 ),
             )
         }
     }
 
-    private fun startUbuntuProotFallback() {
+    private fun startDebianProotFallback() {
         viewModelScope.launch {
             message("正在准备 proot 兼容模式…")
-            termuxEnvironment.ensureUbuntuInstalled(requireProot = true).getOrElse { error ->
+            termuxEnvironment.ensureDebianInstalled(requireProot = true).getOrElse { error ->
                 message(error.message ?: "proot 兼容模式不可用")
                 return@launch
             }
             terminalSession.terminate()
-            _uiState.update { it.copy(terminalRuntime = TerminalRuntime.Ubuntu, ubuntuBackend = UbuntuBackend.Proot) }
+            _uiState.update { it.copy(terminalRuntime = TerminalRuntime.Debian, linuxBackend = LinuxBackend.Proot) }
             terminalSession.start(
                 TerminalLaunch.Interactive(
                     TerminalMode.User,
                     termuxEnvironment.home.absolutePath,
-                    TerminalRuntime.Ubuntu,
-                    UbuntuBackend.Proot,
+                    TerminalRuntime.Debian,
+                    LinuxBackend.Proot,
                 ),
             )
+        }
+    }
+
+    private fun migrateUbuntuToDebian() {
+        viewModelScope.launch {
+            message("正在移除旧 Ubuntu 并准备 Debian 13…")
+            termuxEnvironment.deleteLegacyUbuntu()
+            termuxEnvironment.ensureDebianInstalled(requireProot = false).getOrElse { error ->
+                message(error.message ?: "Debian 环境不可用")
+                return@launch
+            }
+            terminalSession.terminate()
+            _uiState.update { it.copy(terminalRuntime = TerminalRuntime.Debian, linuxBackend = LinuxBackend.Chroot) }
+            startTerminal(TerminalMode.User)
         }
     }
 
     private fun runScript(path: String, options: ScriptExecutionOptions) {
         scriptExecutionJob?.cancel()
-        clearCommandHistory()
         scriptExecutionJob = viewModelScope.launch {
             val installed = termuxEnvironment.ensureInstalled()
             if (installed.isFailure) {
@@ -752,8 +1036,7 @@ class HyperShellViewModel @JvmOverloads constructor(
                 return@launch
             }
             terminalSession.terminate()
-            terminalBuffer.clear()
-            _uiState.update { it.copy(page = AppPage.Terminal, terminalSnapshot = terminalBuffer.snapshot()) }
+            _uiState.update { it.copy(page = AppPage.Terminal) }
             var recovery: PermissionRecovery? = null
             try {
                 if (options.temporaryPermission == ScriptPermission.Temporary0777) {
@@ -875,7 +1158,42 @@ class HyperShellViewModel @JvmOverloads constructor(
                 RootAccess.Granted -> {
                     val path = pendingOpenPath
                     pendingOpenPath = null
-                    if (path != null) openBookmarkedPath(path) else loadDirectory(_uiState.value.currentPath)
+                    if (path != null) {
+                        openBookmarkedPath(path)
+                    } else {
+                        var browser = _uiState.value.fileBrowser
+                        if (
+                            browser.left.path == "/" &&
+                            browser.left.backStack.isEmpty() &&
+                            browser.left.forwardStack.isEmpty() &&
+                            browser.left.entries.isEmpty()
+                        ) {
+                            browser = browser.copy(
+                                left = browser.left.copy(path = "/storage/emulated/0"),
+                            )
+                            _uiState.update { state ->
+                                state.copy(
+                                    fileBrowser = browser,
+                                    currentPath = if (browser.activePane == FilePaneId.Left) {
+                                        "/storage/emulated/0"
+                                    } else {
+                                        state.currentPath
+                                    },
+                                )
+                            }
+                        }
+                        val original = browser.activePane
+                        val paneIds = if (_uiState.value.settings.fileLayoutMode == io.github.hypershell.settings.FileLayoutMode.Dual) {
+                            listOf(FilePaneId.Left, FilePaneId.Right)
+                        } else {
+                            listOf(original)
+                        }
+                        paneIds.forEach { id ->
+                            activateFilePane(id)
+                            loadDirectory(browser.pane(id).path, recordHistory = false)
+                        }
+                        activateFilePane(original)
+                    }
                 }
                 RootAccess.Denied -> message("su 未获得 Root，请检查管理器中的应用授权")
                 RootAccess.Unavailable -> message("未找到可用的 Magisk/KernelSU su")
@@ -974,22 +1292,6 @@ class HyperShellViewModel @JvmOverloads constructor(
         temporaryPermission = _uiState.value.settings.scriptPermission,
     )
 
-    private fun rememberCommand(command: String) {
-        if (commandHistory.lastOrNull() != command) commandHistory.addLast(command)
-        trimHistory(_uiState.value.settings.commandHistoryLimit)
-    }
-
-    private fun trimHistory(limit: Int) {
-        while (commandHistory.size > limit) commandHistory.removeFirst()
-    }
-
-    private fun clearCommandHistory() {
-        commandHistory.clear()
-        historyIndex = null
-        historyDraft = ""
-        _uiState.update { it.copy(terminalInput = "") }
-    }
-
     private fun filterAndSort(entries: List<RootFileEntry>, query: String, settings: AppSettings): List<RootFileEntry> {
         val comparator = when (settings.fileSortMode) {
             FileSortMode.Name -> compareBy<RootFileEntry> { it.name.lowercase() }
@@ -1031,6 +1333,7 @@ class HyperShellViewModel @JvmOverloads constructor(
     }
 
     override fun onCleared() {
+        paneDirectoryJobs.values.forEach(Job::cancel)
         zipRepository.close(_uiState.value.zipArchive)
         terminalSession.close()
     }

@@ -1,0 +1,4 @@
+# Docker Official Image debian:13-slim multi-platform OCI index.
+# Update intentionally after reviewing Docker Official Images changes.
+OCI_INDEX_DIGEST=sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+CA_BUNDLE_SHA256=3e68a959493625de324485c7e0314e68688af96b6efdfd80fb7f99e804493459

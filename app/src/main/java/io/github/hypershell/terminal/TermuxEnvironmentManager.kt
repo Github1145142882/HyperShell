@@ -1,6 +1,7 @@
 package io.github.hypershell.terminal
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.Build
 import android.system.Os
 import kotlinx.coroutines.CoroutineDispatcher
@@ -30,7 +31,7 @@ class TermuxEnvironmentManager(
 ) {
     private val appContext = context.applicationContext
     private val mutex = Mutex()
-    private val ubuntuMutex = Mutex()
+    private val debianMutex = Mutex()
     private val _status = MutableStateFlow<TermuxEnvironmentStatus>(TermuxEnvironmentStatus.Checking)
     val status = _status.asStateFlow()
 
@@ -38,7 +39,8 @@ class TermuxEnvironmentManager(
     val home = File(appContext.filesDir, "home")
     val bash = File(prefix, "bin/bash")
     val offlineRepository = File(appContext.filesDir, "repository")
-    val ubuntuRoot = File(appContext.filesDir, "ubuntu-rootfs")
+    val debianRoot = File(appContext.filesDir, "debian-rootfs")
+    private val legacyUbuntuRoot = File(appContext.filesDir, "ubuntu-rootfs")
 
     suspend fun ensureInstalled(): Result<Unit> = mutex.withLock {
         withContext(ioDispatcher) {
@@ -72,26 +74,34 @@ class TermuxEnvironmentManager(
         )
     }
 
-    suspend fun ensureUbuntuInstalled(requireProot: Boolean = false): Result<Unit> {
+    fun hasLegacyUbuntu(): Boolean = legacyUbuntuRoot.isDirectory
+
+    suspend fun deleteLegacyUbuntu() = withContext(ioDispatcher) {
+        legacyUbuntuRoot.deleteRecursively()
+        File(appContext.filesDir, "ubuntu-rootfs-staging").deleteRecursively()
+    }
+
+    suspend fun ensureDebianInstalled(requireProot: Boolean = false): Result<Unit> {
         ensureInstalled().getOrElse { return Result.failure(it) }
-        return ubuntuMutex.withLock {
+        return debianMutex.withLock {
             withContext(ioDispatcher) {
                 runCatching {
-                    val asset = ubuntuAssetName()
+                    val asset = debianAssetName()
                     val expected = expectedDigest(asset)
-                    val marker = File(ubuntuRoot, UBUNTU_MARKER)
+                    val marker = File(debianRoot, DEBIAN_MARKER)
                     if (requireProot) ensureProot()
-                    if (File(ubuntuRoot, "bin/bash").isFile && marker.readTextOrNull() == expected) {
-                        configureUbuntuRoot(ubuntuRoot)
-                        if (requireProot) updateUbuntuAptIndexesIfNeeded()
+                    // A valid user environment survives app updates even when the bundled base
+                    // digest changes. This prevents an APK upgrade from erasing installed data.
+                    if (File(debianRoot, "bin/bash").isFile && marker.isFile) {
+                        configureDebianRoot(debianRoot)
                         return@runCatching
                     }
 
-                    val staging = File(appContext.filesDir, "ubuntu-rootfs-staging")
-                    val archive = File(appContext.cacheDir, "hypershell-ubuntu-base.tar.gz")
+                    val staging = File(appContext.filesDir, "debian-rootfs-staging")
+                    val archive = File(appContext.cacheDir, "hypershell-debian-13.tar.gz")
                     staging.deleteRecursively()
                     archive.delete()
-                    check(staging.mkdirs()) { "无法创建 Ubuntu 暂存目录" }
+                    check(staging.mkdirs()) { "无法创建 Debian 暂存目录" }
                     try {
                         val digest = MessageDigest.getInstance("SHA-256")
                         appContext.assets.open(asset).use { input ->
@@ -106,8 +116,9 @@ class TermuxEnvironmentManager(
                             }
                         }
                         val actual = digest.digest().joinToString("") { "%02x".format(it) }
-                        require(actual == expected) { "Ubuntu Base SHA-256 校验失败" }
+                        require(actual == expected) { "Debian 13 SHA-256 校验失败" }
                         val tar = File(prefix, "bin/tar")
+                        validateTarArchive(tar, archive)
                         val child = ProcessBuilder(tar.absolutePath, "-xzf", archive.absolutePath, "-C", staging.absolutePath)
                             .redirectErrorStream(true)
                             .apply {
@@ -121,12 +132,11 @@ class TermuxEnvironmentManager(
                             }
                             .start()
                         val output = child.inputStream.bufferedReader().use { it.readText() }
-                        check(child.waitFor() == 0) { "Ubuntu Base 解压失败：${output.takeLast(1200)}" }
-                        configureUbuntuRoot(staging)
-                        File(staging, UBUNTU_MARKER).writeText("$actual\n")
-                        ubuntuRoot.deleteRecursively()
-                        check(staging.renameTo(ubuntuRoot)) { "无法启用 Ubuntu 环境" }
-                        if (requireProot) updateUbuntuAptIndexesIfNeeded()
+                        check(child.waitFor() == 0) { "Debian 13 解压失败：${output.takeLast(1200)}" }
+                        configureDebianRoot(staging)
+                        File(staging, DEBIAN_MARKER).writeText("$actual\n")
+                        debianRoot.deleteRecursively()
+                        check(staging.renameTo(debianRoot)) { "无法启用 Debian 环境" }
                     } finally {
                         archive.delete()
                         staging.deleteRecursively()
@@ -136,9 +146,9 @@ class TermuxEnvironmentManager(
         }
     }
 
-    fun ubuntuCommand(backend: UbuntuBackend): List<String> = when (backend) {
-        UbuntuBackend.Chroot -> chrootInteractiveCommand()
-        UbuntuBackend.Proot -> ubuntuProotCommand()
+    fun debianCommand(backend: LinuxBackend): List<String> = when (backend) {
+        LinuxBackend.Chroot -> chrootInteractiveCommand()
+        LinuxBackend.Proot -> debianProotCommand()
     }
 
     suspend fun checkChrootSupport(): Result<Unit> = withContext(ioDispatcher) {
@@ -157,15 +167,15 @@ class TermuxEnvironmentManager(
         }
     }
 
-    private fun ubuntuProotCommand(): List<String> {
+    private fun debianProotCommand(): List<String> {
         val proot = File(prefix, "bin/proot")
-        check(proot.isFile && File(ubuntuRoot, "bin/bash").isFile) { "Ubuntu 环境尚未安装" }
+        check(proot.isFile && File(debianRoot, "bin/bash").isFile) { "Debian 环境尚未安装" }
         return listOf(
             proot.absolutePath,
             "--link2symlink",
             "--kill-on-exit",
             "-0",
-            "-r", ubuntuRoot.absolutePath,
+            "-r", debianRoot.absolutePath,
             "-b", "/dev",
             "-b", "/proc",
             "-b", "/sys",
@@ -175,7 +185,7 @@ class TermuxEnvironmentManager(
             "HOME=/root", "USER=root", "LOGNAME=root",
             "TERM=xterm-256color", "LANG=C.UTF-8",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "/bin/bash", "--login",
+            "/bin/bash", "-lc", debianFirstRunCommand(),
         )
     }
 
@@ -186,7 +196,7 @@ class TermuxEnvironmentManager(
         val className = ChrootProcessMain::class.java.name
         val command = "exec env CLASSPATH=${shellQuote(sourceApk)} /system/bin/app_process /system/bin " +
             "${shellQuote(className)} ${shellQuote(nativeLibrary.absolutePath)} ${shellQuote(action)} " +
-            "${shellQuote(ubuntuRoot.absolutePath)} ${shellQuote(home.absolutePath)}"
+            "${shellQuote(debianRoot.absolutePath)} ${shellQuote(home.absolutePath)}"
         return listOf("su", "-c", command)
     }
 
@@ -197,8 +207,9 @@ class TermuxEnvironmentManager(
      * PTY descriptors created by Termux's TerminalSession.
      */
     private fun chrootInteractiveCommand(): List<String> {
-        val root = shellQuote(ubuntuRoot.absolutePath)
+        val root = shellQuote(debianRoot.absolutePath)
         val hostHome = shellQuote(home.absolutePath)
+        val login = shellQuote(debianFirstRunCommand())
         val inner = """
             set -e
             busybox=''
@@ -214,7 +225,7 @@ class TermuxEnvironmentManager(
             exec /system/bin/chroot $root /usr/bin/env -i \
                 HOME=/root USER=root LOGNAME=root SHELL=/bin/bash TERM=xterm-256color \
                 LANG=C.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-                /bin/bash --login -i
+                /bin/bash -lc $login
         """.trimIndent()
         val command = "exec /system/bin/unshare -m /system/bin/sh -c ${shellQuote(inner)}"
         return listOf("su", "-c", command)
@@ -470,62 +481,23 @@ class TermuxEnvironmentManager(
         if (pacman.isFile && !alias.exists()) runCatching { Os.symlink("pacman", alias.absolutePath) }
     }
 
-    private fun configureUbuntuRoot(root: File) {
+    private fun configureDebianRoot(root: File) {
         File(root, "etc/resolv.conf").apply {
             parentFile?.mkdirs()
-            writeText(
-                "nameserver 223.5.5.5\n" +
-                    "nameserver 119.29.29.29\n" +
-                    "nameserver 1.1.1.1\n",
-            )
-        }
-        File(root, "etc/apt/mirrors.txt").apply {
-            parentFile?.mkdirs()
-            writeText(
-                "https://mirrors.ustc.edu.cn/ubuntu-ports/\n" +
-                    "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/\n" +
-                    "https://mirrors.aliyun.com/ubuntu-ports/\n" +
-                    "https://ports.ubuntu.com/ubuntu-ports/\n",
-            )
-        }
-        File(root, "etc/apt/mirrors-bootstrap.txt").apply {
-            parentFile?.mkdirs()
-            // Ubuntu Base deliberately omits ca-certificates. These HTTP endpoints are used only
-            // to install that package; APT still authenticates Release metadata and every package
-            // with the Ubuntu archive keyring before accepting it.
-            writeText(
-                "http://mirrors.ustc.edu.cn/ubuntu-ports/\n" +
-                    "http://mirrors.aliyun.com/ubuntu-ports/\n" +
-                    "http://ports.ubuntu.com/ubuntu-ports/\n",
-            )
-        }
-        File(root, "etc/apt/sources.bootstrap.list").apply {
-            parentFile?.mkdirs()
-            val source = "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] " +
-                "mirror+file:/etc/apt/mirrors-bootstrap.txt"
-            val components = "main restricted universe multiverse"
-            writeText(
-                "$source noble $components\n" +
-                    "$source noble-updates $components\n" +
-                    "$source noble-security $components\n" +
-                    "$source noble-backports $components\n",
-            )
+            val dns = currentDnsServers().ifEmpty { listOf("1.1.1.1", "8.8.8.8") }
+            writeText(dns.distinct().joinToString(separator = "\n", postfix = "\n") { "nameserver $it" })
         }
         File(root, "etc/apt/sources.list").apply {
             parentFile?.mkdirs()
-            val source = "deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] " +
-                "mirror+file:/etc/apt/mirrors.txt"
-            val components = "main restricted universe multiverse"
-            writeText(
-                "$source noble $components\n" +
-                    "$source noble-updates $components\n" +
-                    "$source noble-security $components\n" +
-                    "$source noble-backports $components\n",
-            )
+            writeText("# Debian sources are defined in sources.list.d/debian.sources\n")
         }
         File(root, "etc/apt/sources.list.d").apply {
             mkdirs()
             listFiles()?.forEach { if (it.isFile) it.delete() }
+        }
+        File(root, "etc/apt/sources.list.d/debian.sources").writeText(debianAptSources())
+        check(File(root, "usr/share/keyrings/debian-archive-keyring.pgp").isFile) {
+            "Debian archive keyring missing"
         }
         File(root, "etc/apt/apt.conf.d/99hypershell-network").apply {
             parentFile?.mkdirs()
@@ -536,48 +508,6 @@ class TermuxEnvironmentManager(
                     "Acquire::https::Timeout \"25\";\n",
             )
         }
-        installUbuntuAptWrapper(root, "apt")
-        installUbuntuAptWrapper(root, "apt-get")
-        File(root, "usr/local/bin/pkg").apply {
-            parentFile?.mkdirs()
-            writeText(
-                """#!/bin/bash
-set -e
-command=${'$'}{1:-help}
-[[ ${'$'}# -gt 0 ]] && shift
-ensure_indexes() {
-  find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q . || /usr/local/sbin/apt update
-}
-case "${'$'}command" in
-  install|in)
-    ensure_indexes
-    mapped=()
-    for argument in "${'$'}@"; do
-      if [[ "${'$'}argument" == python ]]; then
-        mapped+=(python3 python-is-python3)
-      else
-        mapped+=("${'$'}argument")
-      fi
-    done
-    exec /usr/local/sbin/apt install "${'$'}{mapped[@]}"
-    ;;
-  update|up) exec /usr/local/sbin/apt update ;;
-  upgrade) /usr/local/sbin/apt update && exec /usr/local/sbin/apt full-upgrade "${'$'}@" ;;
-  remove|uninstall) exec /usr/local/sbin/apt remove "${'$'}@" ;;
-  search) exec /usr/local/sbin/apt search "${'$'}@" ;;
-  show) exec /usr/local/sbin/apt show "${'$'}@" ;;
-  list-all) exec /usr/local/sbin/apt list ;;
-  clean) exec /usr/local/sbin/apt clean ;;
-  *)
-    printf '%s\n' 'HyperShell pkg (Ubuntu APT backend)' \
-      'pkg install <package>' 'pkg update' 'pkg upgrade' \
-      'pkg search <query>' 'pkg remove <package>'
-    ;;
-esac
-""",
-            )
-            Os.chmod(absolutePath, 0b111_101_101)
-        }
         File(root, "usr/sbin/policy-rc.d").apply {
             parentFile?.mkdirs()
             writeText("#!/bin/sh\nexit 101\n")
@@ -585,57 +515,11 @@ esac
         }
     }
 
-    private fun installUbuntuAptWrapper(root: File, command: String) {
-        File(root, "usr/local/sbin/$command").apply {
-            parentFile?.mkdirs()
-            writeText(
-                """#!/bin/sh
-set -e
-real=/usr/bin/$command
-bootstrap_ca_certificates() {
-  [ -s /etc/ssl/certs/ca-certificates.crt ] && return 0
-  printf '%s\n' 'HyperShell: first-run certificate bootstrap...'
-  install -d -o _apt -g root -m 700 /var/lib/apt/lists/partial /var/cache/apt/archives/partial 2>/dev/null || {
-    mkdir -p /var/lib/apt/lists/partial /var/cache/apt/archives/partial
-    chmod 700 /var/lib/apt/lists/partial /var/cache/apt/archives/partial
-  }
-  bootstrap_options='-o Dir::Etc::sourcelist=/etc/apt/sources.bootstrap.list -o Dir::Etc::sourceparts=-'
-  /usr/bin/apt-get ${'$'}bootstrap_options update
-  DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get ${'$'}bootstrap_options install -y ca-certificates
-  update-ca-certificates >/dev/null 2>&1 || true
-  /usr/bin/apt-get update
-}
-case "${'$'}{1:-}" in
-  update|install|upgrade|full-upgrade|dist-upgrade)
-    bootstrap_ca_certificates
-    if ! find /var/lib/apt/lists -maxdepth 1 -type f -size +0c 2>/dev/null | grep -q .; then
-      /usr/bin/apt-get update
-    fi
-    ;;
-esac
-exec "${'$'}real" "${'$'}@"
-""",
-            )
-            Os.chmod(absolutePath, 0b111_101_101)
-        }
-    }
-
-    private fun updateUbuntuAptIndexesIfNeeded() {
-        val lists = File(ubuntuRoot, "var/lib/apt/lists")
-        val hasIndexes = lists.listFiles().orEmpty().any { it.isFile && it.length() > 0L }
-        if (hasIndexes) return
-        val command = ubuntuProotCommand().dropLast(2) + listOf(
-            "/usr/local/sbin/apt-get",
-            "-o", "Acquire::Retries=1",
-            "-o", "Acquire::http::Timeout=15",
-            "update",
-        )
-        runCatching {
-            val child = ProcessBuilder(command).redirectErrorStream(true).start()
-            child.inputStream.bufferedReader().use { it.readText() }
-            child.waitFor()
-        }
-    }
+    private fun currentDnsServers(): List<String> = runCatching {
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+        val network = connectivity?.activeNetwork ?: return@runCatching emptyList()
+        connectivity.getLinkProperties(network)?.dnsServers.orEmpty().map { it.hostAddress }
+    }.getOrDefault(emptyList())
 
     private fun File.readPrefix(limit: Int): String = runCatching {
         inputStream().buffered().use { input ->
@@ -699,11 +583,10 @@ exec "${'$'}real" "${'$'}@"
         return "bootstrap/bootstrap-$arch.zip"
     }
 
-    private fun ubuntuAssetName(): String {
-        require(Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "预置 Ubuntu 当前仅支持 arm64-v8a" }
+    private fun debianAssetName(): String {
+        return debianAssetPathForAbis(Build.SUPPORTED_ABIS.toList())
         // The .bin suffix prevents AAPT from transparently expanding .gz and
-        // dropping its suffix. Bytes remain the official Ubuntu archive.
-        return "ubuntu/ubuntu-base-24.04.4-base-arm64-android.tar.gz.bin"
+        // dropping its suffix. Bytes remain the verified OCI-derived archive.
     }
 
     private fun expectedDigest(asset: String): String =
@@ -728,9 +611,16 @@ exec "${'$'}real" "${'$'}@"
             path.startsWith("lib/apt/methods/") ||
             path == "etc/termux/bootstrap/termux-bootstrap-second-stage.sh"
 
+    private fun validateTarArchive(tar: File, archive: File) {
+        val child = ProcessBuilder(tar.absolutePath, "-tzf", archive.absolutePath).redirectErrorStream(true).start()
+        val listing = child.inputStream.bufferedReader().use { it.readLines() }
+        check(child.waitFor() == 0 && listing.isNotEmpty()) { "Debian 资产目录清单无效" }
+        listing.forEach { entry -> require(isSafeArchivePath(entry)) { "Debian 资产路径越界：$entry" } }
+    }
+
     private companion object {
         const val MARKER = ".hypershell-bootstrap-version"
-        const val UBUNTU_MARKER = ".hypershell-ubuntu-version"
+        const val DEBIAN_MARKER = ".hypershell-debian-version"
         const val PACMAN_DB_VERSION = "9"
         const val REPOSITORY_LAYOUT_VERSION = 2
         const val CHROOT_PROBE_TIMEOUT_SECONDS = 20L
@@ -752,3 +642,42 @@ internal fun localAptUpdateCommand(aptGet: File, localSource: File): List<String
 )
 
 internal fun androidRepositoryFileName(assetName: String): String = assetName.replace('\uF03A', ':')
+
+internal fun debianAssetPathForAbis(abis: List<String>): String {
+    require("arm64-v8a" in abis) { "预置 Debian 13 当前仅支持 arm64-v8a" }
+    return "debian/debian-13-slim-arm64-android.tar.gz.bin"
+}
+
+internal fun debianAptSources(): String {
+    val components = "main contrib non-free non-free-firmware"
+    val keyring = "/usr/share/keyrings/debian-archive-keyring.pgp"
+    return """
+        Types: deb
+        URIs: http://deb.debian.org/debian
+        Suites: trixie trixie-updates
+        Components: $components
+        Signed-By: $keyring
+
+        Types: deb
+        URIs: http://deb.debian.org/debian-security
+        Suites: trixie-security
+        Components: $components
+        Signed-By: $keyring
+    """.trimIndent() + "\n"
+}
+
+internal fun debianFirstRunCommand(): String = """
+    if ! find /var/lib/apt/lists -maxdepth 1 -type f -name '*_Packages*' -print -quit 2>/dev/null | grep -q .; then
+        printf '\\nHyperShell: 正在首次同步 Debian 13 官方软件索引…\\n'
+        if ! apt-get update; then
+            printf '\\nHyperShell: APT 索引同步失败，请检查网络后运行 apt-get update。\\n'
+        fi
+    fi
+    exec /bin/bash --login -i
+""".trimIndent()
+
+internal fun isSafeArchivePath(path: String): Boolean {
+    val normalized = path.removePrefix("./").trimEnd('/')
+    if (normalized.isEmpty()) return true
+    return !normalized.startsWith('/') && normalized.split('/').none { it == ".." || it.isEmpty() }
+}

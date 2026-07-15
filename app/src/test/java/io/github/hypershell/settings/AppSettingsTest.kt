@@ -15,8 +15,9 @@ class AppSettingsTest {
         val settings = AppSettings()
         assertEquals(ThemeSource.Monet, settings.themeSource)
         assertEquals(BrightnessMode.System, settings.brightnessMode)
-        assertEquals(2_000, settings.scrollbackLines)
-        assertEquals(100, settings.commandHistoryLimit)
+        assertEquals(FileLayoutMode.Dual, settings.fileLayoutMode)
+        assertEquals(BottomBarStyle.LiquidGlass, settings.bottomBarStyle)
+        assertEquals(true, settings.bottomBarHdrFeedback)
         assertEquals(EditorLimit.MiB4, settings.editorLimit)
         assertEquals(0.35f, settings.terminalBackgroundDim)
         assertEquals(0f, settings.terminalBackgroundBlur)
@@ -27,5 +28,13 @@ class AppSettingsTest {
     fun legacyPingFangMigratesToMiSans() {
         assertEquals(TerminalFont.MiSans, decodeTerminalFont("PingFang"))
         assertEquals(TerminalFont.SystemMono, decodeTerminalFont("not-a-font"))
+    }
+
+    @Test
+    fun legacyBottomBarFlagsMigrateToSingleStyle() {
+        assertEquals(BottomBarStyle.StandardNavigation, migrateBottomBarStyle(null, floating = false, glass = true))
+        assertEquals(BottomBarStyle.FloatingSolid, migrateBottomBarStyle(null, floating = true, glass = false))
+        assertEquals(BottomBarStyle.LiquidGlass, migrateBottomBarStyle(null, floating = true, glass = true))
+        assertEquals(BottomBarStyle.FloatingSolid, migrateBottomBarStyle("FloatingSolid", floating = false, glass = true))
     }
 }

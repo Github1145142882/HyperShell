@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -53,6 +57,7 @@ import io.github.hypershell.HyperShellEvent
 import io.github.hypershell.HyperShellUiState
 import io.github.hypershell.HyperShellViewModel
 import io.github.hypershell.settings.AppSettings
+import io.github.hypershell.settings.BottomBarStyle
 import io.github.hypershell.settings.colorSchemeMode
 import io.github.hypershell.terminal.TerminalHdrController
 import io.github.hypershell.ui.kit.component.FloatingBottomBar
@@ -122,11 +127,20 @@ internal fun HyperShellTheme(settings: AppSettings, content: @Composable () -> U
 fun HyperShellApp(viewModel: HyperShellViewModel, modifier: Modifier = Modifier) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     HyperShellTheme(state.settings) {
+        val fileActionBlurEnabled = Build.VERSION.SDK_INT >= 33 && isRenderEffectSupported()
+        val pageSurface = MiuixTheme.colorScheme.surface
+        val fileActionBackdrop = if (fileActionBlurEnabled) {
+            rememberLayerBackdrop {
+                drawRect(pageSurface)
+                drawContent()
+            }
+        } else {
+            null
+        }
         val stack = remember { mutableStateListOf<NavKey>(ShellRoute.Main) }
         val snackbar = remember { SnackbarHostState() }
         val clipboard = LocalClipboardManager.current
         val context = LocalContext.current
-
         fun pop() {
             if (stack.lastOrNull() == ShellRoute.ZipPreview) viewModel.closeZip()
             if (stack.size > 1) stack.removeAt(stack.lastIndex)
@@ -150,26 +164,38 @@ fun HyperShellApp(viewModel: HyperShellViewModel, modifier: Modifier = Modifier)
             modifier = modifier.fillMaxSize().background(MiuixTheme.colorScheme.background),
             snackbarHost = { SnackbarHost(snackbar) },
         ) {
-            NavDisplay(
-                backStack = stack,
-                entryDecorators = listOf(
-                    rememberSaveableStateHolderNavEntryDecorator(),
-                    rememberViewModelStoreNavEntryDecorator(),
-                ),
-                onBack = ::pop,
-                entryProvider = entryProvider {
-                    entry<ShellRoute.Main> {
-                        MainShell(state, viewModel) {
-                            context.startActivity(Intent(context, AppearanceActivity::class.java))
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (fileActionBackdrop != null) {
+                            Modifier.layerBackdrop(fileActionBackdrop)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
+                NavDisplay(
+                    backStack = stack,
+                    entryDecorators = listOf(
+                        rememberSaveableStateHolderNavEntryDecorator(),
+                        rememberViewModelStoreNavEntryDecorator(),
+                    ),
+                    onBack = ::pop,
+                    entryProvider = entryProvider {
+                        entry<ShellRoute.Main> {
+                            MainShell(state, viewModel) {
+                                context.startActivity(Intent(context, AppearanceActivity::class.java))
+                            }
                         }
-                    }
-                    entry<ShellRoute.ZipPreview> {
-                        ZipPreviewPage(state, viewModel, ::pop)
-                    }
-                },
-            )
+                        entry<ShellRoute.ZipPreview> {
+                            ZipPreviewPage(state, viewModel, ::pop)
+                        }
+                    },
+                )
+            }
             ShellConfirmation(state, viewModel)
-            FileActionOverlay(state, viewModel)
+            FileActionOverlay(state, viewModel, fileActionBackdrop)
         }
     }
 }
@@ -187,7 +213,8 @@ private fun MainShell(
     }
     val pager = rememberPagerState(initialPage = initial, pageCount = { 3 })
     val mainState = rememberMainPagerState(pager)
-    val blurEnabled = state.settings.bottomBarBlur && Build.VERSION.SDK_INT >= 33 && isRenderEffectSupported()
+    val blurEnabled = state.settings.bottomBarStyle == BottomBarStyle.LiquidGlass &&
+        Build.VERSION.SDK_INT >= 33 && isRenderEffectSupported()
     val blurBackdrop = rememberBlurBackdrop(blurEnabled)
     val surface = MiuixTheme.colorScheme.surface
     val glassBackdrop = rememberLayerBackdrop { drawRect(surface); drawContent() }
@@ -197,26 +224,35 @@ private fun MainShell(
     }
     LaunchedEffect(pager.currentPage) { mainState.syncPage() }
     val activity = LocalActivity.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hdrResumeGeneration by remember(lifecycleOwner) { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) hdrResumeGeneration++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(
         activity,
         state.settings.terminalHdrHighlight,
-        state.settings.floatingBottomBarGlass,
         mainState.selectedPage,
         pager.settledPage,
+        hdrResumeGeneration,
     ) {
         activity ?: return@LaunchedEffect
         // Use the real pager position, not the asynchronously mirrored ViewModel page.
         // Requiring both values also disables HDR for the whole duration of a page transition.
         val terminalPageHdr = mainState.selectedPage == 1 && pager.settledPage == 1
-        // The local F16/scRGB navigation surface still needs an HDR-capable parent window.
-        // Keep that capability across all three pages, but only feed extended-range glyphs to
-        // the renderer while the terminal page is settled. Ordinary Compose top bars remain SDR.
-        val windowHdrEnabled = state.settings.terminalHdrHighlight &&
-            (terminalPageHdr || state.settings.floatingBottomBarGlass)
+        val terminalTextHdr = state.settings.terminalHdrHighlight && terminalPageHdr
+        // v21 drives both terminal glyphs and the Miuix liquid-glass interaction from the
+        // Activity HDR surface. The glass feedback is intentionally available on every page
+        // (including the file toolbar), while terminalTextEnabled remains terminal-only.
+        val windowHdrEnabled = terminalTextHdr || state.settings.bottomBarHdrFeedback
         TerminalHdrController.apply(
             activity = activity,
             enabled = windowHdrEnabled,
-            terminalTextEnabled = terminalPageHdr,
+            terminalTextEnabled = terminalTextHdr,
         ).onFailure { error ->
             if (windowHdrEnabled) viewModel.reportHdrUnavailable(error.message ?: "当前设备无法输出真 HDR")
         }
@@ -240,13 +276,13 @@ private fun MainShell(
                 HorizontalPager(
                     state = pager,
                     beyondViewportPageCount = 1,
-                    // Termux owns horizontal/vertical touch gestures for transcript scrolling,
-                    // selection and mouse tracking. Navigation remains available from the bar.
-                    userScrollEnabled = pager.currentPage != 1,
+                    // Page navigation is intentionally bar-only. This prevents file-pane and
+                    // terminal gestures from accidentally switching the whole application page.
+                    userScrollEnabled = false,
                     modifier = Modifier
                         .fillMaxSize()
                         .then(
-                            if (state.settings.floatingBottomBar && state.settings.floatingBottomBarGlass) {
+                            if (state.settings.bottomBarStyle == BottomBarStyle.LiquidGlass) {
                                 Modifier.layerBackdrop(glassBackdrop)
                             } else Modifier,
                         ),
@@ -276,7 +312,7 @@ private fun ShellBottomBar(
         Triple(MiuixIcons.Play, "终端", AppPage.Terminal),
         Triple(MiuixIcons.Settings, "设置", AppPage.Settings),
     )
-    if (!state.settings.floatingBottomBar) {
+    if (state.settings.bottomBarStyle == BottomBarStyle.StandardNavigation) {
         BlurredBar(blurBackdrop) {
             NavigationBar(color = if (blurBackdrop != null) Color.Transparent else MiuixTheme.colorScheme.surface) {
                 items.forEachIndexed { index, item ->
@@ -301,8 +337,9 @@ private fun ShellBottomBar(
             onSelected = mainState::animateToPage,
             backdrop = glassBackdrop,
             tabsCount = items.size,
-            isBlurEnabled = state.settings.floatingBottomBarGlass && state.settings.bottomBarBlur,
-            hdrPulseEnabled = state.settings.terminalHdrHighlight && state.settings.floatingBottomBarGlass,
+            isBlurEnabled = state.settings.bottomBarStyle == BottomBarStyle.LiquidGlass,
+            hdrPulseEnabled = state.settings.bottomBarHdrFeedback &&
+                state.settings.bottomBarStyle == BottomBarStyle.LiquidGlass,
         ) {
             items.forEachIndexed { index, item ->
                 FloatingBottomBarItem(

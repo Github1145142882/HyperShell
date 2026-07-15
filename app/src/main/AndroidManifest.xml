@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- miuix-blur is only reached behind the API 33 RuntimeShader gate; API 26-32 use the opaque fallback. -->
     <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
     <application
@@ -16,9 +17,17 @@
         android:theme="@style/Theme.HyperShell"
         android:usesCleartextTraffic="false">
         <activity
+            android:name=".HdrWarmupActivity"
+            android:colorMode="default"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/Theme.HyperShell.HdrWarmup" />
+        <activity
             android:name=".MainActivity"
+            android:colorMode="default"
             android:exported="true"
-            android:windowSoftInputMode="adjustNothing">
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

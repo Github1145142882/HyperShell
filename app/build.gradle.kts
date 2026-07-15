@@ -14,8 +14,8 @@ android {
         applicationId = "io.github.hypershell"
         minSdk = 26
         targetSdk = 28
-        versionCode = 25
-        versionName = "1.4.19"
+        versionCode = 27
+        versionName = "1.5.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
@@ -35,8 +35,8 @@ android {
     sourceSets["main"].assets.srcDir(rootProject.layout.projectDirectory.dir("termux-build/generated/assets"))
 
     androidResources {
-        // Keep Ubuntu Base byte-for-byte identical to the official SHA-256 target.
-        // AAPT otherwise transparently expands .gz assets and drops the suffix.
+        // Keep the verified Debian OCI rootfs archive compressed. AAPT otherwise
+        // transparently expands .gz assets and drops the suffix.
         noCompress += "gz"
     }
 

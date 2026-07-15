@@ -1,6 +1,8 @@
 package io.github.hypershell.files
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RootFileRepositoryTest {
@@ -40,5 +42,15 @@ class RootFileRepositoryTest {
         assertEquals("a\nfile", entries[0].name)
         assertEquals(FileKind.Regular, entries[0].kind)
         assertEquals(FileKind.Directory, entries[1].kind)
+    }
+
+    @Test
+    fun archiveEntriesCannotEscapeDestination() {
+        assertTrue(RootFileRepository.isSafeArchiveEntry("folder/script.sh"))
+        assertTrue(RootFileRepository.isSafeArchiveEntry("./folder/file.txt"))
+        assertFalse(RootFileRepository.isSafeArchiveEntry("../../data/adb/module"))
+        assertFalse(RootFileRepository.isSafeArchiveEntry("/system/bin/sh"))
+        assertFalse(RootFileRepository.isSafeArchiveEntry("folder//file"))
+        assertFalse(RootFileRepository.isSafeArchiveEntry(""))
     }
 }
