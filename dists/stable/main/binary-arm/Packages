@@ -1,0 +1,29 @@
+Package: ca-certificates-java
+Architecture: all
+Version: 1:2026.05.14
+Maintainer: @termux
+Installed-Size: 184
+Depends: ca-certificates (= 1:2026.05.14)
+Filename: pool/main/ca-certificates-java_1:2026.05.14_all.deb
+Size: 96468
+MD5sum: 90e8ef1228860b23feefa8d10df9e542
+SHA1: b9b9578540b99a53ed190a5a51447341af520137
+SHA256: 256cddcac6db20a6ccdcb3ee80e03c9e899737a2c9a464c26d49e9bf44fd6f7b
+SHA512: 789318cf7721b02d38257eb6c0d3f299c08b9fcaf3b4c9c8faf06871b9c3ebefd6d55d9a2df89cdf07aeb4b3adcf02a80ad8916deec4763c22259d95777fc32b
+Homepage: https://curl.se/docs/caextract.html
+Description: Common CA certificates (java keystore format)
+
+Package: ca-certificates
+Architecture: all
+Version: 1:2026.05.14
+Maintainer: @termux
+Installed-Size: 232
+Filename: pool/main/ca-certificates_1:2026.05.14_all.deb
+Size: 105732
+MD5sum: 18a6c80216153faf960196a767004f54
+SHA1: d37b0a2a1c5bc4d7faa92d53aca6207dd146df7a
+SHA256: d17e37172a37cd0f9906e2146627a74813b66e962583c9eacb2e0622b15dd4e2
+SHA512: 7e0c76bf25d85615e5ef7b8ba7de4b919bb3b16750672e3bf4a557eb0d97727982ac529cb15be7db11088aea3ed2b49dad169727a12be070e76fed22a36ba9b1
+Homepage: https://curl.se/docs/caextract.html
+Description: Common CA certificates
+

@@ -1,0 +1,57 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: aarch64 arm x86_64
+Codename: stable
+Components: main
+Date: Thu, 16 Jul 2026 15:36:00 +0000
+Description: Packages rebuilt for io.github.hypershell
+Label: HyperShell
+Origin: HyperShell
+Suite: stable
+MD5Sum:
+ 3abe9b698e9804e9d754823fd3f9079c              212 Release
+ 5ef6d01fdb786db6a9e05c4703745c83            18985 main/binary-aarch64/Packages
+ 31062ffad19d4e53585cf0931bbdf6f5             7538 main/binary-aarch64/Packages.gz
+ 35d27b99d000d378f3df7dd17f713077             1186 main/binary-arm/Packages
+ 4e744c997bde1a351dffd7b68e307719              629 main/binary-arm/Packages.gz
+ 35d27b99d000d378f3df7dd17f713077             1186 main/binary-x86_64/Packages
+ 4e744c997bde1a351dffd7b68e307719              629 main/binary-x86_64/Packages.gz
+SHA1:
+ d08a5e4c713b501511083b36ddab76d6d5ae709e              212 Release
+ b573e5fa20e8ee5794a17a10543b60d0c56556c1            18985 main/binary-aarch64/Packages
+ 034b14cc03a27790679ab2fd92508fad67befe69             7538 main/binary-aarch64/Packages.gz
+ 3832545383cd01b619731c6c48a24a6c58f24f5c             1186 main/binary-arm/Packages
+ 1f570cb22ed72f7d5ba48eee30e1c679539c777c              629 main/binary-arm/Packages.gz
+ 3832545383cd01b619731c6c48a24a6c58f24f5c             1186 main/binary-x86_64/Packages
+ 1f570cb22ed72f7d5ba48eee30e1c679539c777c              629 main/binary-x86_64/Packages.gz
+SHA256:
+ 68a70331bf7c938f5cf00c6828534a313c4a24503ba446fd5177c0215d108086              212 Release
+ ef26f3e235e4eba1045c7ea4536afd6d5e03b535237da38184e155d3257a2011            18985 main/binary-aarch64/Packages
+ 1430c90872fbdd54143fa5d724a85cce8e1c4b89ffe6dcf5a89c54a7c9f16dc4             7538 main/binary-aarch64/Packages.gz
+ 73b4100d84efbd97f393dc43c522ad73bc6a24bd7bb5f0261c3f855f0a64e09f             1186 main/binary-arm/Packages
+ 7f965178aff5be933aa6c33a6f9573fe445dd3f4f2ab32ef9703beca67c81b04              629 main/binary-arm/Packages.gz
+ 73b4100d84efbd97f393dc43c522ad73bc6a24bd7bb5f0261c3f855f0a64e09f             1186 main/binary-x86_64/Packages
+ 7f965178aff5be933aa6c33a6f9573fe445dd3f4f2ab32ef9703beca67c81b04              629 main/binary-x86_64/Packages.gz
+SHA512:
+ be9a2c824ff479d01c0348202b3ad3618694b9098fdba94f889f48ad90d4c743b5333ec2902b78cf03423e07ef3044a8b7af6d27bd85856fc620c9e7c8a2ac96              212 Release
+ d96e5b4adc4436998c843c0aa6c8d74e1e9e3b5943c95c5d66e266f1bfeb9a177e2434f2341cc4bdc8945e670facf4d5d60ec3fc0498ae408bcde0d70025a003            18985 main/binary-aarch64/Packages
+ ef52bc0447bdcc3ad8a7d8eb6d73b1953ec6c83f56f5979fe83b076fa5ca34c0738af2613be826b84067153de281130f875bea9ee83540d2d5679c5721df38db             7538 main/binary-aarch64/Packages.gz
+ e828cc67c0da589518807d87bb7a98997b69c644920516964f4443a91daf9270e97344e13ee233872fb7fa63337f8a9bb1142640e96bc4d8d61e04533980cfdc             1186 main/binary-arm/Packages
+ 2ac2b294770584cca5fbd536335ad61f052dbf3ddd79e52929288e74d2cad7cd718ab1f0499fc274e8b16eaee09018a0bf1f2acd7e7ae8d5ca6e1308ce31252b              629 main/binary-arm/Packages.gz
+ e828cc67c0da589518807d87bb7a98997b69c644920516964f4443a91daf9270e97344e13ee233872fb7fa63337f8a9bb1142640e96bc4d8d61e04533980cfdc             1186 main/binary-x86_64/Packages
+ 2ac2b294770584cca5fbd536335ad61f052dbf3ddd79e52929288e74d2cad7cd718ab1f0499fc274e8b16eaee09018a0bf1f2acd7e7ae8d5ca6e1308ce31252b              629 main/binary-x86_64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQGzBAEBCgAdFiEEjmSokIbzM/H3+fN3o+H7QLeFjcEFAmpY+mAACgkQo+H7QLeF
+jcGTygv7BQOAh766jos+T4tYSopUo9LCJR/Chb985+k1a7jy/5KCUQPG8x7FweyK
+r7ECPiyZQr7xq7VYtVpqkG9SnabRdOlXLtUuK+sUtRsXEpQpMwjX45R/Ox9GIaBC
+tHFrx83Y4MVZbeRKi579Z0HW/GLR1DVgWP3yBZlgxfFxZptcvM0xmsVI7InatWxG
+qDwZgLsyN4tRZw2cJ0R3IbgicDydjmJ8zRnZHBoIGVFmXfH4K1eVndaj02ycvSMd
+deCfuFmDeFU4/2xY54VHXCKnW3TQVMc8bPc9XS0mb7vant38oQCceNnpnkwXqvaJ
+PGjj4X6bLgZIrhYhfVarpE8tOu1kNNPzF9Gk4r8hlZh3+8y/zOB/dyoWrJ4LiN9M
+9AJj3s60ecjbxbeEVY/Ga/ckf/PwYP+f8hHrVN9TUXFBhFJXa8+QAlGELwD6Q63M
+0ufQAG+AKUmdTjeSIJk5jxlROY3nO2vUC0/fEvA/A5beC/aeZCFWggjQyVSDQeTM
+bkalj3IP
+=i+b3
+-----END PGP SIGNATURE-----
