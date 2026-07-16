@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.sevtinge.hyperceiler.provision'
+    compileSdk 37
+
+    defaultConfig {
+        minSdk 35
+    }
+
+    buildFeatures {
+        aidl true
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile rootProject.file('third_party/HyperCeiler/library/provision/src/main/AndroidManifest.xml')
+            java.srcDirs = [
+                rootProject.file('third_party/HyperCeiler/library/provision/src/main/java'),
+                file('src/adapter')
+            ]
+            java.exclude 'fan/provision/ProvisionAnimHelper.java'
+            java.exclude { element ->
+                element.file.canonicalFile == rootProject.file(
+                    'third_party/HyperCeiler/library/provision/src/main/java/com/sevtinge/hyperceiler/provision/fragment/PermissionSettingsFragment.java'
+                ).canonicalFile
+            }
+            java.exclude { element ->
+                element.file.canonicalFile == rootProject.file(
+                    'third_party/HyperCeiler/library/provision/src/main/java/com/sevtinge/hyperceiler/provision/fragment/BasicSettingsFragment.java'
+                ).canonicalFile
+            }
+            kotlin.srcDirs = [rootProject.file('third_party/HyperCeiler/library/provision/src/main/java')]
+            res.srcDirs = [rootProject.file('third_party/HyperCeiler/library/provision/src/main/res')]
+            aidl.srcDirs = [rootProject.file('third_party/HyperCeiler/library/provision/src/main/aidl')]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    api project(':hyperceiler-common')
+}

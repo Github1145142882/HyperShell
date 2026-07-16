@@ -3,9 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- miuix-blur is only reached behind the API 33 RuntimeShader gate; API 26-32 use the opaque fallback. -->
-    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur,com.sevtinge.hyperceiler.common,com.sevtinge.hyperceiler.provision,fan.animation,fan.appcompat,fan.androidbase,fan.basewidget,fan.bottomsheet,fan.cardview,fan.core,fan.flexible,fan.folme,fan.graphics,fan.haptic,fan.navigator,fan.nestedheader,fan.pickerwidget,fan.popupwidget,fan.preference,androidx.preference,fan.recyclerview,fan.slidingwidget,fan.smooth,fan.springback,fan.stretchablewidget,fan.theme,fan.transition,fan.viewpager,fan.viewpager2" />
     <application
+        android:name=".HyperShellApplication"
         android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -27,6 +29,8 @@
             android:name=".MainActivity"
             android:colorMode="default"
             android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.HyperShell.Launcher"
             android:windowSoftInputMode="stateAlwaysHidden|adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -34,8 +38,30 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".onboarding.HyperShellProvisionActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/HyperShellProvisionStartupTheme"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+        <activity
+            android:name="com.sevtinge.hyperceiler.provision.activity.TermsAndStatementActivity"
+            android:enabled="false" />
+        <activity-alias
+            android:name="com.sevtinge.hyperceiler.ui.HomePageActivity"
+            android:exported="false"
+            android:targetActivity=".MainActivity" />
+        <activity
             android:name=".AppearanceActivity"
             android:exported="false"
             android:theme="@style/Theme.HyperShell" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_provider_paths" />
+        </provider>
     </application>
 </manifest>

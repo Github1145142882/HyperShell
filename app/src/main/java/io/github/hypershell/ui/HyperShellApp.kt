@@ -4,6 +4,7 @@ import android.content.Intent
 import android.app.WallpaperManager
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
@@ -35,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,6 +59,14 @@ import io.github.hypershell.AppearanceActivity
 import io.github.hypershell.HyperShellEvent
 import io.github.hypershell.HyperShellUiState
 import io.github.hypershell.HyperShellViewModel
+import io.github.hypershell.R
+import io.github.hypershell.onboarding.HyperShellOnboarding
+import io.github.hypershell.onboarding.OnboardingBrightness
+import io.github.hypershell.onboarding.OnboardingBottomBarStyle
+import io.github.hypershell.onboarding.OnboardingDefaultEnvironment
+import io.github.hypershell.onboarding.OnboardingFileLayout
+import io.github.hypershell.onboarding.OnboardingPreferences
+import io.github.hypershell.onboarding.OnboardingThemeSource
 import io.github.hypershell.settings.AppSettings
 import io.github.hypershell.settings.BottomBarStyle
 import io.github.hypershell.settings.colorSchemeMode
@@ -126,7 +137,39 @@ internal fun HyperShellTheme(settings: AppSettings, content: @Composable () -> U
 @Composable
 fun HyperShellApp(viewModel: HyperShellViewModel, modifier: Modifier = Modifier) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    if (!state.settingsLoaded || (state.onboardingEntry != null && Build.VERSION.SDK_INT >= 35)) {
+        Box(modifier = modifier.fillMaxSize().background(Color.Black))
+        return
+    }
     HyperShellTheme(state.settings) {
+        val onboardingEntry = state.onboardingEntry
+        if (onboardingEntry != null) {
+            val activity = LocalActivity.current
+            HyperShellOnboarding(
+                step = state.onboardingStep,
+                entry = onboardingEntry,
+                preferences = state.settings.toOnboardingPreferences(),
+                rootVerificationState = state.rootVerificationState,
+                onPreferencesChange = viewModel::updateOnboardingPreferences,
+                onVerifyRoot = viewModel::verifyRootForOnboarding,
+                onNext = viewModel::advanceOnboarding,
+                onBack = viewModel::backOnboarding,
+                onExit = { activity?.finish() },
+                modifier = modifier,
+                logo = {
+                    Image(
+                        painter = painterResource(R.drawable.ic_onboarding_logo),
+                        contentDescription = "HyperShell",
+                        modifier = Modifier.size(96.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                            androidx.compose.ui.graphics.Color.White.copy(alpha = 0.92f),
+                            blendMode = androidx.compose.ui.graphics.BlendMode.SrcIn,
+                        ),
+                    )
+                },
+            )
+            return@HyperShellTheme
+        }
         val fileActionBlurEnabled = Build.VERSION.SDK_INT >= 33 && isRenderEffectSupported()
         val pageSurface = MiuixTheme.colorScheme.surface
         val fileActionBackdrop = if (fileActionBlurEnabled) {
@@ -142,7 +185,10 @@ fun HyperShellApp(viewModel: HyperShellViewModel, modifier: Modifier = Modifier)
         val clipboard = LocalClipboardManager.current
         val context = LocalContext.current
         fun pop() {
-            if (stack.lastOrNull() == ShellRoute.ZipPreview) viewModel.closeZip()
+            when (stack.lastOrNull()) {
+                ShellRoute.ZipPreview -> viewModel.closeZip()
+                else -> Unit
+            }
             if (stack.size > 1) stack.removeAt(stack.lastIndex)
         }
 
@@ -184,9 +230,12 @@ fun HyperShellApp(viewModel: HyperShellViewModel, modifier: Modifier = Modifier)
                     onBack = ::pop,
                     entryProvider = entryProvider {
                         entry<ShellRoute.Main> {
-                            MainShell(state, viewModel) {
-                                context.startActivity(Intent(context, AppearanceActivity::class.java))
-                            }
+                            MainShell(
+                                state = state,
+                                viewModel = viewModel,
+                                onAppearance = { context.startActivity(Intent(context, AppearanceActivity::class.java)) },
+                                onOnboarding = viewModel::startOnboardingReplay,
+                            )
                         }
                         entry<ShellRoute.ZipPreview> {
                             ZipPreviewPage(state, viewModel, ::pop)
@@ -205,6 +254,7 @@ private fun MainShell(
     state: HyperShellUiState,
     viewModel: HyperShellViewModel,
     onAppearance: () -> Unit,
+    onOnboarding: () -> Unit,
 ) {
     val initial = when (state.page) {
         AppPage.Files -> 0
@@ -291,7 +341,7 @@ private fun MainShell(
                     when (page) {
                         0 -> FilesPage(state, viewModel, bottom)
                         1 -> TerminalPage(state, viewModel, bottom)
-                        2 -> SettingsPage(state.settings, viewModel, bottom, onAppearance)
+                        2 -> SettingsPage(state.settings, viewModel, bottom, onAppearance, onOnboarding)
                     }
                 }
             }
@@ -299,6 +349,37 @@ private fun MainShell(
         }
     }
 }
+
+private fun AppSettings.toOnboardingPreferences(): OnboardingPreferences = OnboardingPreferences(
+    themeSource = when (themeSource) {
+        io.github.hypershell.settings.ThemeSource.Standard -> OnboardingThemeSource.Standard
+        io.github.hypershell.settings.ThemeSource.Monet -> OnboardingThemeSource.Monet
+    },
+    brightness = when (brightnessMode) {
+        io.github.hypershell.settings.BrightnessMode.System -> OnboardingBrightness.System
+        io.github.hypershell.settings.BrightnessMode.Light -> OnboardingBrightness.Light
+        io.github.hypershell.settings.BrightnessMode.Dark -> OnboardingBrightness.Dark
+    },
+    fileLayout = when (fileLayoutMode) {
+        io.github.hypershell.settings.FileLayoutMode.Single -> OnboardingFileLayout.Single
+        io.github.hypershell.settings.FileLayoutMode.Dual -> OnboardingFileLayout.Dual
+    },
+    showHiddenFiles = showHiddenFiles,
+    scriptUseRoot = scriptUseRoot,
+    keepTerminalInBackground = keepTerminalInBackground,
+    showWelcomeOnLaunch = showWelcomeOnLaunch,
+    bottomBarStyle = when (bottomBarStyle) {
+        BottomBarStyle.LiquidGlass -> OnboardingBottomBarStyle.LiquidGlass
+        BottomBarStyle.FloatingSolid -> OnboardingBottomBarStyle.FloatingSolid
+        BottomBarStyle.StandardNavigation -> OnboardingBottomBarStyle.StandardNavigation
+    },
+    bottomBarHdrFeedback = bottomBarHdrFeedback,
+    terminalHdrHighlight = terminalHdrHighlight,
+    defaultEnvironment = when (defaultTerminalEnvironment) {
+        io.github.hypershell.settings.DefaultTerminalEnvironment.Termux -> OnboardingDefaultEnvironment.Termux
+        io.github.hypershell.settings.DefaultTerminalEnvironment.Debian -> OnboardingDefaultEnvironment.Debian
+    },
+)
 
 @Composable
 private fun ShellBottomBar(

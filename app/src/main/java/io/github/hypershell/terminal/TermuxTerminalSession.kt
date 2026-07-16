@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Termux's official terminal-emulator and terminal-view wired to HyperShell's lifecycle contract.
@@ -46,6 +47,29 @@ class TermuxTerminalSession(
     private var customFontPath: String? = null
     private var transparentBackground = false
     private var onFontSizeChanged: ((Float) -> Unit)? = null
+    private val controlKey = AtomicBoolean(false)
+    private val altKey = AtomicBoolean(false)
+    var onModifierKeysChanged: ((control: Boolean, alt: Boolean) -> Unit)? = null
+
+    fun setControlKey(armed: Boolean) {
+        controlKey.set(armed)
+        notifyModifierKeysChanged()
+    }
+
+    fun setAltKey(armed: Boolean) {
+        altKey.set(armed)
+        notifyModifierKeysChanged()
+    }
+
+    fun clearModifierKeys() {
+        controlKey.set(false)
+        altKey.set(false)
+        notifyModifierKeysChanged()
+    }
+
+    private fun notifyModifierKeysChanged() {
+        onModifierKeysChanged?.invoke(controlKey.get(), altKey.get())
+    }
 
     override suspend fun start(launch: TerminalLaunch, rows: Int, columns: Int) {
         withContext(Dispatchers.Main.immediate) {
@@ -164,6 +188,7 @@ class TermuxTerminalSession(
     }
 
     private fun terminateCurrent(updateStatus: Boolean) {
+        clearModifierKeys()
         coreSession?.let { session ->
             session.pid.takeIf { it > 0 }?.let { pid ->
                 runCatching { Os.kill(-pid, 9) }
@@ -261,11 +286,16 @@ class TermuxTerminalSession(
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: CoreSession) = false
     override fun onKeyUp(keyCode: Int, e: KeyEvent) = false
     override fun onLongPress(event: MotionEvent) = false
-    override fun readControlKey() = false
-    override fun readAltKey() = false
+    override fun readControlKey() = controlKey.get()
+    override fun readAltKey() = altKey.get()
     override fun readShiftKey() = false
     override fun readFnKey() = false
-    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: CoreSession) = false
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: CoreSession): Boolean {
+        val consumedControl = controlKey.getAndSet(false)
+        val consumedAlt = altKey.getAndSet(false)
+        if (consumedControl || consumedAlt) notifyModifierKeysChanged()
+        return false
+    }
     override fun onEmulatorSet() = Unit
 
     override fun logError(tag: String, message: String) { Log.e(tag, message) }

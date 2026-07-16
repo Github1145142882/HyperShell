@@ -1,11 +1,17 @@
 package io.github.hypershell
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.os.SystemClock
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.hypershell.files.FileKind
@@ -26,12 +32,27 @@ import io.github.hypershell.files.TextPage
 import io.github.hypershell.files.ZipArchive
 import io.github.hypershell.files.ZipItem
 import io.github.hypershell.files.ZipRepository
+import io.github.hypershell.onboarding.CURRENT_ONBOARDING_VERSION
+import io.github.hypershell.onboarding.OnboardingBrightness
+import io.github.hypershell.onboarding.OnboardingBottomBarStyle
+import io.github.hypershell.onboarding.OnboardingDefaultEnvironment
+import io.github.hypershell.onboarding.OnboardingEntry
+import io.github.hypershell.onboarding.OnboardingFileLayout
+import io.github.hypershell.onboarding.OnboardingPreferences
+import io.github.hypershell.onboarding.OnboardingStep
+import io.github.hypershell.onboarding.OnboardingThemeSource
+import io.github.hypershell.onboarding.RootVerificationState
 import io.github.hypershell.settings.AppSettings
+import io.github.hypershell.settings.BrightnessMode
+import io.github.hypershell.settings.BottomBarStyle
+import io.github.hypershell.settings.DefaultTerminalEnvironment
+import io.github.hypershell.settings.FileLayoutMode
 import io.github.hypershell.settings.FileSortMode
 import io.github.hypershell.settings.ScriptExecutionOptions
 import io.github.hypershell.settings.ScriptPermission
 import io.github.hypershell.settings.SettingsRepository
 import io.github.hypershell.settings.TerminalFont
+import io.github.hypershell.settings.ThemeSource
 import io.github.hypershell.terminal.TerminalLaunch
 import io.github.hypershell.terminal.TerminalMode
 import io.github.hypershell.terminal.TerminalRuntime
@@ -59,8 +80,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.UUID
+import kotlin.math.max
+import kotlin.math.min
 
 enum class AppPage { Terminal, Files, Settings, Appearance }
 
@@ -90,7 +120,13 @@ private data class ActivePaneProjection(
 data class HyperShellUiState(
     val page: AppPage = AppPage.Terminal,
     val settings: AppSettings = AppSettings(),
+    val settingsLoaded: Boolean = false,
+    val onboardingEntry: OnboardingEntry? = null,
+    val onboardingStep: OnboardingStep = OnboardingStep.Welcome,
+    val rootVerificationState: RootVerificationState = RootVerificationState.Idle,
     val terminalStatus: TerminalStatus = TerminalStatus.Idle,
+    val terminalControlArmed: Boolean = false,
+    val terminalAltArmed: Boolean = false,
     val terminalRuntime: TerminalRuntime = TerminalRuntime.Termux,
     val linuxBackend: LinuxBackend = LinuxBackend.Chroot,
     val termuxEnvironmentStatus: TermuxEnvironmentStatus = TermuxEnvironmentStatus.Checking,
@@ -101,6 +137,7 @@ data class HyperShellUiState(
     val filesLoading: Boolean = false,
     val fileBrowser: FileBrowserState = FileBrowserState(),
     val fileAction: FileActionState? = null,
+    val imageThumbnails: Map<String, String> = emptyMap(),
     val document: TextDocument? = null,
     val documentReadOnly: Boolean = false,
     val editorText: String = "",
@@ -125,7 +162,10 @@ class HyperShellViewModel @JvmOverloads constructor(
     application: Application,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val fileRepository: RootFileRepository = RootFileRepository(ioDispatcher = ioDispatcher),
+    private val fileRepository: RootFileRepository = RootFileRepository(
+        cacheDirectory = application.cacheDir,
+        ioDispatcher = ioDispatcher,
+    ),
     private val termuxEnvironment: TermuxEnvironmentManager = TermuxEnvironmentManager(application, ioDispatcher),
     terminalSessionFactory: (kotlinx.coroutines.CoroutineScope) -> TerminalSession = {
         TermuxTerminalSession(application, termuxEnvironment)
@@ -144,6 +184,8 @@ class HyperShellViewModel @JvmOverloads constructor(
     private var rootAuthorizationDeadline = 0L
     private var backgroundTerminationJob: Job? = null
     private var fileOperationJob: Job? = null
+    private val thumbnailJobs = mutableMapOf<String, Job>()
+    private val thumbnailSemaphore = Semaphore(2)
     private val paneDirectoryJobs = mutableMapOf<FilePaneId, Job>()
     private val paneEntries = mutableMapOf<FilePaneId, List<RootFileEntry>>(
         FilePaneId.Left to emptyList(),
@@ -153,15 +195,20 @@ class HyperShellViewModel @JvmOverloads constructor(
     private var scriptExecutionJob: Job? = null
     private var pendingZipExtraction: ZipItem? = null
     private var pendingOpenPath: String? = null
+    private var applicationInitialized = false
     private var allEntries: List<RootFileEntry> = emptyList()
     private val directoryCache = object : LinkedHashMap<String, List<RootFileEntry>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<RootFileEntry>>): Boolean = size > 16
     }
 
     init {
+        (terminalSession as? TermuxTerminalSession)?.onModifierKeysChanged = { control, alt ->
+            _uiState.update { it.copy(terminalControlArmed = control, terminalAltArmed = alt) }
+        }
         cleanupSessionCache()
         viewModelScope.launch {
-            settingsRepository.settings.collect { settings ->
+            settingsRepository.snapshot.collect { snapshot ->
+                val settings = snapshot.settings
                 _uiState.update { state ->
                     val browser = FilePaneId.entries.fold(state.fileBrowser) { current, id ->
                         current.updatePane(id) { pane ->
@@ -171,6 +218,26 @@ class HyperShellViewModel @JvmOverloads constructor(
                     val active = browser.pane(browser.activePane)
                     state.copy(
                         settings = settings,
+                        settingsLoaded = true,
+                        terminalRuntime = if (!state.settingsLoaded) {
+                            when (settings.defaultTerminalEnvironment) {
+                                DefaultTerminalEnvironment.Termux -> TerminalRuntime.Termux
+                                DefaultTerminalEnvironment.Debian -> TerminalRuntime.Debian
+                            }
+                        } else {
+                            state.terminalRuntime
+                        },
+                        onboardingEntry = when {
+                            state.onboardingEntry == OnboardingEntry.Replay -> OnboardingEntry.Replay
+                            snapshot.completedOnboardingVersion < CURRENT_ONBOARDING_VERSION -> OnboardingEntry.FirstRun
+                            else -> null
+                        },
+                        onboardingStep = when {
+                            state.onboardingEntry == OnboardingEntry.Replay -> state.onboardingStep
+                            state.onboardingEntry == OnboardingEntry.FirstRun -> state.onboardingStep
+                            snapshot.completedOnboardingVersion < CURRENT_ONBOARDING_VERSION -> snapshot.pendingOnboardingStep
+                            else -> OnboardingStep.Welcome
+                        },
                         fileBrowser = browser,
                         entries = active.entries,
                         searchQuery = active.searchQuery,
@@ -182,6 +249,9 @@ class HyperShellViewModel @JvmOverloads constructor(
                     settings.customTerminalFontPath,
                     settings.terminalBackgroundImagePath != null,
                 )
+                if (snapshot.completedOnboardingVersion >= CURRENT_ONBOARDING_VERSION) {
+                    initializeApplicationOnce()
+                }
             }
         }
         viewModelScope.launch {
@@ -214,6 +284,118 @@ class HyperShellViewModel @JvmOverloads constructor(
                 _uiState.update { it.copy(termuxEnvironmentStatus = status) }
             }
         }
+    }
+
+    fun startOnboardingReplay() {
+        _uiState.update {
+            it.copy(
+                onboardingEntry = OnboardingEntry.Replay,
+                onboardingStep = OnboardingStep.Welcome,
+                rootVerificationState = RootVerificationState.Idle,
+            )
+        }
+    }
+
+    fun completeOriginalOnboarding(entry: OnboardingEntry, preferences: OnboardingPreferences) {
+        viewModelScope.launch {
+            settingsRepository.update { settings -> settings.withOnboardingPreferences(preferences) }
+            if (entry == OnboardingEntry.Replay) {
+                _uiState.update {
+                    it.copy(
+                        onboardingEntry = null,
+                        onboardingStep = OnboardingStep.Welcome,
+                        rootVerificationState = RootVerificationState.Idle,
+                        page = AppPage.Settings,
+                    )
+                }
+                return@launch
+            }
+            settingsRepository.completeOnboarding()
+            _uiState.update {
+                it.copy(
+                    onboardingEntry = null,
+                    onboardingStep = OnboardingStep.Welcome,
+                    rootVerificationState = RootVerificationState.Idle,
+                    terminalRuntime = when (preferences.defaultEnvironment) {
+                        OnboardingDefaultEnvironment.Termux -> TerminalRuntime.Termux
+                        OnboardingDefaultEnvironment.Debian -> TerminalRuntime.Debian
+                    },
+                )
+            }
+            initializeApplicationOnce()
+        }
+    }
+
+    fun advanceOnboarding() {
+        val state = _uiState.value
+        val entry = state.onboardingEntry ?: return
+        if (state.onboardingStep == OnboardingStep.Complete) {
+            if (entry == OnboardingEntry.Replay) {
+                _uiState.update {
+                    it.copy(
+                        onboardingEntry = null,
+                        onboardingStep = OnboardingStep.Welcome,
+                        rootVerificationState = RootVerificationState.Idle,
+                        page = AppPage.Settings,
+                    )
+                }
+            } else {
+                viewModelScope.launch {
+                    settingsRepository.completeOnboarding()
+                    _uiState.update {
+                        it.copy(
+                            onboardingEntry = null,
+                            onboardingStep = OnboardingStep.Welcome,
+                            rootVerificationState = RootVerificationState.Idle,
+                        )
+                    }
+                    initializeApplicationOnce()
+                }
+            }
+            return
+        }
+        val next = state.onboardingStep.next()
+        _uiState.update { it.copy(onboardingStep = next) }
+        if (entry == OnboardingEntry.FirstRun) {
+            viewModelScope.launch { settingsRepository.updatePendingOnboardingStep(next) }
+        }
+    }
+
+    fun backOnboarding() {
+        val state = _uiState.value
+        val entry = state.onboardingEntry ?: return
+        val previous = state.onboardingStep.previous()
+        _uiState.update { it.copy(onboardingStep = previous) }
+        if (entry == OnboardingEntry.FirstRun) {
+            viewModelScope.launch { settingsRepository.updatePendingOnboardingStep(previous) }
+        }
+    }
+
+    fun updateOnboardingPreferences(preferences: OnboardingPreferences) {
+        updateSettings { settings -> settings.withOnboardingPreferences(preferences) }
+    }
+
+    fun verifyRootForOnboarding() {
+        if (_uiState.value.rootVerificationState == RootVerificationState.Checking) return
+        _uiState.update { it.copy(rootVerificationState = RootVerificationState.Checking) }
+        viewModelScope.launch {
+            val access = fileRepository.checkRoot()
+            _uiState.update {
+                it.copy(
+                    rootAccess = access,
+                    rootVerificationState = if (access == RootAccess.Granted) {
+                        RootVerificationState.Available
+                    } else {
+                        RootVerificationState.Unavailable
+                    },
+                )
+            }
+        }
+    }
+
+    private fun initializeApplicationOnce() {
+        if (applicationInitialized) return
+        applicationInitialized = true
         viewModelScope.launch(ioDispatcher) { restoreInterruptedPermissionChange() }
         authorizeFiles()
     }
@@ -335,7 +517,20 @@ class HyperShellViewModel @JvmOverloads constructor(
     fun sendTerminalKey(sequence: String) = writeTerminal(sequence.toByteArray())
 
     fun interruptTerminal() {
-        viewModelScope.launch { terminalSession.sendSignal(2) }
+        // Send VINTR through the PTY. Signalling the outer su/chroot process does not
+        // reliably reach Debian's foreground process group.
+        (terminalSession as? TermuxTerminalSession)?.clearModifierKeys()
+        writeTerminal(byteArrayOf(0x03))
+    }
+
+    fun toggleTerminalControlKey() {
+        val session = terminalSession as? TermuxTerminalSession ?: return
+        session.setControlKey(!_uiState.value.terminalControlArmed)
+    }
+
+    fun toggleTerminalAltKey() {
+        val session = terminalSession as? TermuxTerminalSession ?: return
+        session.setAltKey(!_uiState.value.terminalAltArmed)
     }
 
     fun resizeTerminal(rows: Int, columns: Int) {
@@ -505,14 +700,72 @@ class HyperShellViewModel @JvmOverloads constructor(
     }
 
     fun stageSelectedFiles(id: FilePaneId, move: Boolean) {
-        val pane = _uiState.value.fileBrowser.pane(id)
+        val state = _uiState.value
+        val pane = state.fileBrowser.pane(id)
         if (pane.selectedPaths.isEmpty()) return message("请先选择文件")
+        if (state.settings.fileLayoutMode == FileLayoutMode.Dual) {
+            transferSelectionToOppositePane(id, if (move) FileClipboardMode.Move else FileClipboardMode.Copy)
+            return
+        }
         _uiState.update {
             it.copy(fileBrowser = it.fileBrowser.copy(
                 clipboard = FileClipboard(pane.selectedPaths.toList(), if (move) FileClipboardMode.Move else FileClipboardMode.Copy),
             ).updatePane(id) { current -> current.copy(selectedPaths = emptySet()) })
         }
         message(if (move) "已剪切 ${pane.selectedPaths.size} 项" else "已复制 ${pane.selectedPaths.size} 项")
+    }
+
+    fun transferSelectionToOppositePane(sourcePaneId: FilePaneId, mode: FileClipboardMode) {
+        val browser = _uiState.value.fileBrowser
+        val sourcePane = browser.pane(sourcePaneId)
+        if (sourcePane.selectedPaths.isEmpty()) return message("请先选择文件")
+        val destinationPaneId = if (sourcePaneId == FilePaneId.Left) FilePaneId.Right else FilePaneId.Left
+        val destinationPane = browser.pane(destinationPaneId)
+        if (sourcePane.path == destinationPane.path) return message("源目录与目标目录相同")
+
+        val selectedPaths = sourcePane.entries
+            .asSequence()
+            .map(RootFileEntry::path)
+            .filter(sourcePane.selectedPaths::contains)
+            .toList()
+            .ifEmpty { sourcePane.selectedPaths.toList() }
+        fileOperationJob?.cancel()
+        paneDirectoryJobs.values.forEach(Job::cancel)
+        fileOperationJob = viewModelScope.launch {
+            val failedPaths = linkedSetOf<String>()
+            val errors = mutableListOf<String>()
+            selectedPaths.forEach { source ->
+                val target = "${destinationPane.path}/${source.substringAfterLast('/')}".replace("//", "/")
+                val result = if (mode == FileClipboardMode.Move) {
+                    fileRepository.move(source, target, io.github.hypershell.files.ConflictPolicy.AutoRename)
+                } else {
+                    fileRepository.copy(source, target, io.github.hypershell.files.ConflictPolicy.AutoRename)
+                }
+                if (result is FileOperationResult.Failure) {
+                    failedPaths += source
+                    errors += "${source.substringAfterLast('/')}: ${result.message}"
+                }
+            }
+
+            _uiState.update { state ->
+                state.copy(
+                    fileBrowser = state.fileBrowser
+                        .copy(activePane = destinationPaneId)
+                        .updatePane(sourcePaneId) { pane -> pane.copy(selectedPaths = failedPaths) },
+                )
+            }
+            loadDirectoryForPane(destinationPaneId, destinationPane.path, recordHistory = false)
+            if (mode == FileClipboardMode.Move) {
+                loadDirectoryForPane(sourcePaneId, sourcePane.path, recordHistory = false)
+            }
+            message(
+                if (errors.isEmpty()) {
+                    if (mode == FileClipboardMode.Move) "已移动 ${selectedPaths.size} 项到另一窗格" else "已复制 ${selectedPaths.size} 项到另一窗格"
+                } else {
+                    "完成，但有 ${errors.size} 项失败：${errors.first().take(120)}"
+                },
+            )
+        }
     }
 
     fun pasteIntoPane(id: FilePaneId) {
@@ -613,9 +866,12 @@ class HyperShellViewModel @JvmOverloads constructor(
 
 
     fun loadDirectory(path: String, recordHistory: Boolean = true) {
+        loadDirectoryForPane(_uiState.value.fileBrowser.activePane, path, recordHistory)
+    }
+
+    private fun loadDirectoryForPane(paneId: FilePaneId, path: String, recordHistory: Boolean = true) {
         if (_uiState.value.rootAccess != RootAccess.Granted) return
         val normalized = RootFileRepository.normalizeAbsolutePath(path) ?: return message("请输入绝对路径")
-        val paneId = _uiState.value.fileBrowser.activePane
         val previousPane = _uiState.value.fileBrowser.pane(paneId)
         val previousEntries = paneEntries[paneId].orEmpty()
         val cached = directoryCache[normalized]
@@ -771,6 +1027,207 @@ class HyperShellViewModel @JvmOverloads constructor(
         _uiState.value.fileAction?.entry?.path?.let { _events.tryEmit(HyperShellEvent.CopyPath(it)) }
     }
 
+    fun openSelectedFileExternally(always: Boolean = false) {
+        val action = _uiState.value.fileAction ?: return
+        if (action.entry.kind != FileKind.Regular) {
+            message("只有普通文件可以交给其他应用打开")
+            return
+        }
+        dismissFileAction()
+        fileOperationJob?.cancel()
+        fileOperationJob = viewModelScope.launch {
+            val application = getApplication<Application>()
+            val sharedDirectory = File(application.cacheDir, "shared-files")
+            val exportedFile = withContext(ioDispatcher) {
+                sharedDirectory.mkdirs()
+                val expiry = System.currentTimeMillis() - EXTERNAL_FILE_CACHE_LIFETIME_MILLIS
+                sharedDirectory.listFiles()?.forEach { cached ->
+                    if (cached.lastModified() < expiry) runCatching { cached.delete() }
+                }
+                val safeName = action.entry.name
+                    .replace(Regex("[\\u0000-\\u001f\\u007f/\\\\]"), "_")
+                    .takeLast(96)
+                    .ifBlank { "file" }
+                File(sharedDirectory, "${UUID.randomUUID()}-$safeName")
+            }
+            when (val result = fileRepository.export(action.entry.path, exportedFile)) {
+                is FileOperationResult.Failure -> {
+                    withContext(ioDispatcher) { exportedFile.delete() }
+                    message(result.message)
+                }
+                is FileOperationResult.Success -> {
+                    val extension = action.entry.name.substringAfterLast('.', "")
+                        .lowercase(Locale.ROOT)
+                    val mimeType = MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(extension)
+                        ?: "application/octet-stream"
+                    val uri = FileProvider.getUriForFile(
+                        application,
+                        "${application.packageName}.fileprovider",
+                        exportedFile,
+                    )
+                    val viewIntent = Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, mimeType)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    viewIntent.clipData = ClipData.newRawUri(action.entry.name, uri)
+                    val launchIntent = if (always) {
+                        // A raw ACTION_VIEW lets Android/HyperOS offer and persist its native
+                        // “仅此一次 / 始终” choice. createChooser intentionally never does.
+                        viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    } else {
+                        Intent.createChooser(viewIntent, "使用其他应用打开")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    try {
+                        application.startActivity(launchIntent)
+                    } catch (_: ActivityNotFoundException) {
+                        withContext(ioDispatcher) { exportedFile.delete() }
+                        message("没有可打开此类型文件的应用")
+                    } catch (error: Throwable) {
+                        withContext(ioDispatcher) { exportedFile.delete() }
+                        message("无法打开文件：${error.message ?: "未知错误"}")
+                    }
+                }
+            }
+        }
+    }
+
+    fun ensureImageThumbnail(entry: RootFileEntry) {
+        val extension = entry.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        if (entry.kind != FileKind.Regular || extension !in PREVIEWABLE_IMAGE_EXTENSIONS) return
+        if (entry.size <= 0L || entry.size > MAX_THUMBNAIL_SOURCE_BYTES) return
+
+        val expectedName = thumbnailCacheName(entry, extension == "svg")
+        val existing = _uiState.value.imageThumbnails[entry.path]
+        if (existing != null && File(existing).name == expectedName && File(existing).isFile) return
+        if (thumbnailJobs[entry.path]?.isActive == true) return
+
+        thumbnailJobs[entry.path] = viewModelScope.launch {
+            try {
+                val thumbnail = withContext(ioDispatcher) {
+                    thumbnailSemaphore.withPermit { createImageThumbnail(entry, expectedName, extension) }
+                }
+                if (thumbnail != null && thumbnail.isFile) {
+                    _uiState.update { state ->
+                        val updated = LinkedHashMap(state.imageThumbnails)
+                        updated.remove(entry.path)?.let { stale ->
+                            if (stale != thumbnail.absolutePath) runCatching { File(stale).delete() }
+                        }
+                        updated[entry.path] = thumbnail.absolutePath
+                        while (updated.size > MAX_THUMBNAIL_STATE_ITEMS) {
+                            val oldest = updated.entries.first()
+                            updated.remove(oldest.key)
+                        }
+                        state.copy(imageThumbnails = updated)
+                    }
+                }
+            } finally {
+                thumbnailJobs.remove(entry.path)
+            }
+        }
+    }
+
+    private suspend fun createImageThumbnail(
+        entry: RootFileEntry,
+        cacheName: String,
+        extension: String,
+    ): File? {
+        val directory = File(getApplication<Application>().cacheDir, "hypershell-thumbnails")
+        if (!directory.exists() && !directory.mkdirs()) return null
+        val output = File(directory, cacheName)
+        if (output.isFile && output.length() > 0L) {
+            output.setLastModified(System.currentTimeMillis())
+            return output
+        }
+
+        val source = File.createTempFile("hypershell-thumbnail-", ".source", directory)
+        return try {
+            when (fileRepository.export(entry.path, source)) {
+                is FileOperationResult.Failure -> null
+                is FileOperationResult.Success -> {
+                    val created = if (extension == "svg") {
+                        source.copyTo(output, overwrite = true)
+                        output.length() > 0L
+                    } else {
+                        createRasterThumbnail(source, output)
+                    }
+                    if (created) {
+                        pruneThumbnailCache(directory, output)
+                        output
+                    } else {
+                        output.delete()
+                        null
+                    }
+                }
+            }
+        } finally {
+            source.delete()
+        }
+    }
+
+    private fun createRasterThumbnail(source: File, output: File): Boolean {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(source.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
+
+        var sample = 1
+        while (bounds.outWidth / sample > THUMBNAIL_DECODE_EDGE * 2 ||
+            bounds.outHeight / sample > THUMBNAIL_DECODE_EDGE * 2
+        ) {
+            sample *= 2
+        }
+        val decoded = BitmapFactory.decodeFile(
+            source.absolutePath,
+            BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            },
+        ) ?: return false
+        val longest = max(decoded.width, decoded.height)
+        val scale = min(1f, THUMBNAIL_DECODE_EDGE.toFloat() / longest.toFloat())
+        val scaled = if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                decoded,
+                max(1, (decoded.width * scale).toInt()),
+                max(1, (decoded.height * scale).toInt()),
+                true,
+            )
+        } else {
+            decoded
+        }
+        val written = runCatching {
+            FileOutputStream(output).use { stream ->
+                scaled.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            }
+        }.getOrDefault(false)
+        if (scaled !== decoded) decoded.recycle()
+        scaled.recycle()
+        return written
+    }
+
+    private fun thumbnailCacheName(entry: RootFileEntry, svg: Boolean): String {
+        val fingerprint = "${entry.path}\u0000${entry.size}\u0000${entry.modifiedAt.toEpochMilli()}"
+        val digest = MessageDigest.getInstance("SHA-256").digest(fingerprint.toByteArray())
+        val hex = buildString(32) {
+            digest.take(16).forEach { byte -> append("%02x".format(Locale.ROOT, byte.toInt() and 0xff)) }
+        }
+        return "$hex.${if (svg) "svg" else "png"}"
+    }
+
+    private fun pruneThumbnailCache(directory: File, keep: File) {
+        val expiry = System.currentTimeMillis() - THUMBNAIL_CACHE_LIFETIME_MILLIS
+        directory.listFiles()?.forEach { file ->
+            if (file != keep && (file.name.endsWith(".source") || file.lastModified() < expiry)) {
+                runCatching { file.delete() }
+            }
+        }
+        directory.listFiles()
+            ?.filter(File::isFile)
+            ?.sortedByDescending(File::lastModified)
+            ?.drop(MAX_THUMBNAIL_DISK_ITEMS)
+            ?.forEach { runCatching { it.delete() } }
+    }
+
     fun renameSelectedFile(newName: String) {
         val action = _uiState.value.fileAction ?: return
         val clean = newName.trim()
@@ -834,6 +1291,10 @@ class HyperShellViewModel @JvmOverloads constructor(
     fun openBookmark(path: String) {
         val normalized = RootFileRepository.normalizeAbsolutePath(path) ?: return message("书签路径无效")
         _uiState.update { it.copy(page = AppPage.Files) }
+        if (!applicationInitialized) {
+            pendingOpenPath = normalized
+            return
+        }
         if (_uiState.value.rootAccess != RootAccess.Granted) {
             pendingOpenPath = normalized
             authorizeFiles()
@@ -1334,6 +1795,7 @@ class HyperShellViewModel @JvmOverloads constructor(
 
     override fun onCleared() {
         paneDirectoryJobs.values.forEach(Job::cancel)
+        thumbnailJobs.values.forEach(Job::cancel)
         zipRepository.close(_uiState.value.zipArchive)
         terminalSession.close()
     }
@@ -1341,5 +1803,45 @@ class HyperShellViewModel @JvmOverloads constructor(
     companion object {
         private const val ROOT_AUTHORIZATION_GRACE_MS = 20_000L
         private const val FILE_STREAM_FRAME_NS = 16_000_000L
+        private const val EXTERNAL_FILE_CACHE_LIFETIME_MILLIS = 24L * 60L * 60L * 1000L
+        private const val MAX_THUMBNAIL_SOURCE_BYTES = 32L * 1024L * 1024L
+        private const val THUMBNAIL_DECODE_EDGE = 192
+        private const val MAX_THUMBNAIL_STATE_ITEMS = 128
+        private const val MAX_THUMBNAIL_DISK_ITEMS = 96
+        private const val THUMBNAIL_CACHE_LIFETIME_MILLIS = 3L * 24L * 60L * 60L * 1000L
+        private val PREVIEWABLE_IMAGE_EXTENSIONS = setOf(
+            "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "heic", "heif", "avif",
+        )
     }
 }
+
+private fun AppSettings.withOnboardingPreferences(preferences: OnboardingPreferences): AppSettings = copy(
+    themeSource = when (preferences.themeSource) {
+        OnboardingThemeSource.Standard -> ThemeSource.Standard
+        OnboardingThemeSource.Monet -> ThemeSource.Monet
+    },
+    brightnessMode = when (preferences.brightness) {
+        OnboardingBrightness.System -> BrightnessMode.System
+        OnboardingBrightness.Light -> BrightnessMode.Light
+        OnboardingBrightness.Dark -> BrightnessMode.Dark
+    },
+    fileLayoutMode = when (preferences.fileLayout) {
+        OnboardingFileLayout.Single -> FileLayoutMode.Single
+        OnboardingFileLayout.Dual -> FileLayoutMode.Dual
+    },
+    showHiddenFiles = preferences.showHiddenFiles,
+    scriptUseRoot = preferences.scriptUseRoot,
+    keepTerminalInBackground = preferences.keepTerminalInBackground,
+    showWelcomeOnLaunch = preferences.showWelcomeOnLaunch,
+    bottomBarStyle = when (preferences.bottomBarStyle) {
+        OnboardingBottomBarStyle.LiquidGlass -> BottomBarStyle.LiquidGlass
+        OnboardingBottomBarStyle.FloatingSolid -> BottomBarStyle.FloatingSolid
+        OnboardingBottomBarStyle.StandardNavigation -> BottomBarStyle.StandardNavigation
+    },
+    bottomBarHdrFeedback = preferences.bottomBarHdrFeedback,
+    terminalHdrHighlight = preferences.terminalHdrHighlight,
+    defaultTerminalEnvironment = when (preferences.defaultEnvironment) {
+        OnboardingDefaultEnvironment.Termux -> DefaultTerminalEnvironment.Termux
+        OnboardingDefaultEnvironment.Debian -> DefaultTerminalEnvironment.Debian
+    },
+)

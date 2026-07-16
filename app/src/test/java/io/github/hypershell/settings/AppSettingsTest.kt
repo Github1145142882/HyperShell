@@ -1,7 +1,10 @@
 package io.github.hypershell.settings
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import io.github.hypershell.onboarding.OnboardingStep
 
 class AppSettingsTest {
     @Test
@@ -13,15 +16,32 @@ class AppSettingsTest {
     @Test
     fun defaultsMatchProductContract() {
         val settings = AppSettings()
-        assertEquals(ThemeSource.Monet, settings.themeSource)
+        assertEquals(ThemeSource.Standard, settings.themeSource)
         assertEquals(BrightnessMode.System, settings.brightnessMode)
         assertEquals(FileLayoutMode.Dual, settings.fileLayoutMode)
+        assertFalse(settings.colorfulFileTheme)
         assertEquals(BottomBarStyle.LiquidGlass, settings.bottomBarStyle)
-        assertEquals(true, settings.bottomBarHdrFeedback)
+        assertFalse(settings.bottomBarHdrFeedback)
+        assertFalse(settings.showWelcomeOnLaunch)
+        assertEquals(DefaultTerminalEnvironment.Termux, settings.defaultTerminalEnvironment)
         assertEquals(EditorLimit.MiB4, settings.editorLimit)
         assertEquals(0.35f, settings.terminalBackgroundDim)
         assertEquals(0f, settings.terminalBackgroundBlur)
         assertEquals(true, settings.terminalHdrHighlight)
+    }
+
+    @Test
+    fun hdrFeedbackDefaultsOffWithoutOverwritingStoredChoice() {
+        assertFalse(decodeBottomBarHdrFeedback(null))
+        assertTrue(decodeBottomBarHdrFeedback(true))
+        assertFalse(decodeBottomBarHdrFeedback(false))
+    }
+
+    @Test
+    fun onboardingStepFallsBackSafely() {
+        assertEquals(OnboardingStep.Welcome, decodeOnboardingStep(null))
+        assertEquals(OnboardingStep.Welcome, decodeOnboardingStep("not-a-step"))
+        assertEquals(OnboardingStep.BasicSettings, decodeOnboardingStep("BasicSettings"))
     }
 
     @Test

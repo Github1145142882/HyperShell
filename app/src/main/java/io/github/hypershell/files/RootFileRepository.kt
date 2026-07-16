@@ -3,7 +3,13 @@ package io.github.hypershell.files
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.zip.UnixStat
+import org.apache.commons.compress.archivers.zip.Zip64Mode
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
+import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.File
@@ -55,6 +61,10 @@ sealed interface FileOperationResult<out T> {
 
 class RootFileRepository(
     private val runner: ShellCommandRunner = ShellCommandRunner(),
+    private val cacheDirectory: File = File(
+        System.getProperty("java.io.tmpdir") ?: ".",
+        "hypershell-cache",
+    ),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     suspend fun checkRoot(): RootAccess {
@@ -393,13 +403,120 @@ class RootFileRepository(
         if (paths.isEmpty()) return FileOperationResult.Failure("未选择文件")
         val target = normalizeAbsolutePath(destination) ?: return FileOperationResult.Failure("归档目标无效")
         val normalized = paths.map { normalizeAbsolutePath(it) ?: return FileOperationResult.Failure("归档源路径无效") }
+        if (format.equals("zip", ignoreCase = true)) return createZipArchive(normalized, target)
         val command = when (format.lowercase()) {
-            "zip" -> "zip -qry -- ${shellQuote(target)} " + normalized.joinToString(" ") { shellQuote(it) }
             "tar" -> "tar -cf ${shellQuote(target)} -- " + normalized.joinToString(" ") { shellQuote(it) }
             "tar.gz", "tgz" -> "tar -czf ${shellQuote(target)} -- " + normalized.joinToString(" ") { shellQuote(it) }
             else -> return FileOperationResult.Failure("不支持的归档格式")
         }
         return runner.runRoot(command, timeoutMillis = 10 * 60_000).unitResult("创建归档失败")
+    }
+
+    private suspend fun createZipArchive(
+        sources: List<String>,
+        target: String,
+    ): FileOperationResult<Unit> = withContext(ioDispatcher) {
+        val parents = sources.map { it.substringBeforeLast('/', "/").ifEmpty { "/" } }.distinct()
+        if (parents.size != 1) return@withContext FileOperationResult.Failure("ZIP 归档源必须位于同一目录")
+        val parent = parents.single()
+        val names = sources.map { it.substringAfterLast('/') }
+        if (names.any { it.isBlank() }) return@withContext FileOperationResult.Failure("ZIP 归档源名称无效")
+        if (!cacheDirectory.exists() && !cacheDirectory.mkdirs()) {
+            return@withContext FileOperationResult.Failure("无法创建 ZIP 临时目录")
+        }
+
+        val localZip = File.createTempFile("archive-", ".zip", cacheDirectory)
+        val rootTemporary = "$target.hypershell-${System.nanoTime()}.tmp"
+        try {
+            val tarCommand = "tar -cf - -C ${shellQuote(parent)} -- " + names.joinToString(" ") { shellQuote(it) }
+            val tarResult = runner.runRootStreaming(
+                command = tarCommand,
+                timeoutMillis = 10 * 60_000,
+            ) { input ->
+                convertTarToZip(input, localZip)
+            }
+            if (!tarResult.successful) return@withContext tarResult.failure("创建 ZIP 数据失败")
+
+            val qTemporary = shellQuote(rootTemporary)
+            val writeResult = runner.runRootFromFile(
+                command = "set -e; rm -f -- $qTemporary; umask 077; cat > $qTemporary; mv -f -- $qTemporary ${shellQuote(target)}",
+                input = localZip,
+                timeoutMillis = 10 * 60_000,
+            )
+            if (writeResult.successful) FileOperationResult.Success(Unit)
+            else writeResult.failure("写入 ZIP 归档失败")
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Throwable) {
+            FileOperationResult.Failure("创建 ZIP 失败：${error.message ?: error::class.java.simpleName}")
+        } finally {
+            localZip.delete()
+            withContext(NonCancellable) {
+                runner.runRoot("rm -f -- ${shellQuote(rootTemporary)}")
+            }
+        }
+    }
+
+    internal fun convertTarToZip(input: InputStream, output: File) {
+        TarArchiveInputStream(input.buffered()).use { tar ->
+            ZipArchiveOutputStream(output).use { zip ->
+                zip.setEncoding("UTF-8")
+                zip.setUseLanguageEncodingFlag(true)
+                zip.setUseZip64(Zip64Mode.AsNeeded)
+                var sourceEntry = tar.nextEntry
+                while (sourceEntry != null) {
+                    val rawName = sourceEntry.name.replace('\\', '/')
+                    require(isSafeArchiveEntry(rawName)) { "归档条目路径不安全：$rawName" }
+                    val normalizedName = rawName.removePrefix("./").let { name ->
+                        if (sourceEntry.isDirectory && !name.endsWith('/')) "$name/" else name
+                    }
+                    val zipEntry = ZipArchiveEntry(normalizedName).apply {
+                        time = sourceEntry.lastModifiedDate.time
+                    }
+                    when {
+                        sourceEntry.isDirectory -> {
+                            zipEntry.unixMode = UnixStat.DIR_FLAG or (sourceEntry.mode and UnixStat.PERM_MASK)
+                            zip.putArchiveEntry(zipEntry)
+                            zip.closeArchiveEntry()
+                        }
+                        sourceEntry.isSymbolicLink -> {
+                            require(isSafeLinkTarget(normalizedName, sourceEntry.linkName)) {
+                                "符号链接目标越界：${sourceEntry.linkName}"
+                            }
+                            zipEntry.unixMode = UnixStat.LINK_FLAG or (sourceEntry.mode and UnixStat.PERM_MASK)
+                            zip.putArchiveEntry(zipEntry)
+                            zip.write(sourceEntry.linkName.toByteArray(Charsets.UTF_8))
+                            zip.closeArchiveEntry()
+                        }
+                        sourceEntry.isLink -> error("ZIP 不支持安全保留硬链接：$normalizedName")
+                        sourceEntry.isFile -> {
+                            zipEntry.unixMode = UnixStat.FILE_FLAG or (sourceEntry.mode and UnixStat.PERM_MASK)
+                            zip.putArchiveEntry(zipEntry)
+                            tar.copyTo(zip)
+                            zip.closeArchiveEntry()
+                        }
+                        else -> error("ZIP 不支持特殊文件：$normalizedName")
+                    }
+                    sourceEntry = tar.nextEntry
+                }
+                zip.finish()
+            }
+        }
+    }
+
+    private fun isSafeLinkTarget(entryName: String, target: String): Boolean {
+        val normalizedTarget = target.replace('\\', '/')
+        if (normalizedTarget.isBlank() || normalizedTarget.startsWith('/')) return false
+        val stack = ArrayDeque<String>()
+        entryName.substringBeforeLast('/', "").split('/').filter { it.isNotBlank() && it != "." }.forEach(stack::addLast)
+        for (part in normalizedTarget.split('/')) {
+            when (part) {
+                "", "." -> Unit
+                ".." -> if (stack.isEmpty()) return false else stack.removeLast()
+                else -> stack.addLast(part)
+            }
+        }
+        return true
     }
 
     suspend fun extractArchive(path: String, destination: String): FileOperationResult<Unit> {

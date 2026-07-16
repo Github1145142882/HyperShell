@@ -4,6 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import org.apache.commons.compress.archivers.tar.TarConstants
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.nio.file.Files
+import java.util.zip.ZipFile
 
 class RootFileRepositoryTest {
     @Test
@@ -52,5 +59,41 @@ class RootFileRepositoryTest {
         assertFalse(RootFileRepository.isSafeArchiveEntry("/system/bin/sh"))
         assertFalse(RootFileRepository.isSafeArchiveEntry("folder//file"))
         assertFalse(RootFileRepository.isSafeArchiveEntry(""))
+    }
+
+    @Test
+    fun tarStreamConvertsToUtf8ZipWithoutExternalZipCommand() {
+        val tarBytes = ByteArrayOutputStream()
+        TarArchiveOutputStream(tarBytes).use { tar ->
+            tar.putArchiveEntry(TarArchiveEntry("folder/").apply { mode = 0b111101101 })
+            tar.closeArchiveEntry()
+
+            val content = "HyperShell 归档".toByteArray()
+            tar.putArchiveEntry(TarArchiveEntry("folder/中文 file.txt").apply {
+                size = content.size.toLong()
+                mode = 0b110100100
+            })
+            tar.write(content)
+            tar.closeArchiveEntry()
+
+            tar.putArchiveEntry(TarArchiveEntry("folder/link", TarConstants.LF_SYMLINK).apply {
+                linkName = "中文 file.txt"
+                mode = 0b111111111
+            })
+            tar.closeArchiveEntry()
+        }
+
+        val output = Files.createTempFile("hypershell-archive-test", ".zip").toFile()
+        try {
+            RootFileRepository().convertTarToZip(ByteArrayInputStream(tarBytes.toByteArray()), output)
+            ZipFile(output).use { zip ->
+                val text = zip.getEntry("folder/中文 file.txt")
+                assertEquals("HyperShell 归档", zip.getInputStream(text).readBytes().toString(Charsets.UTF_8))
+                val link = zip.getEntry("folder/link")
+                assertEquals("中文 file.txt", zip.getInputStream(link).readBytes().toString(Charsets.UTF_8))
+            }
+        } finally {
+            output.delete()
+        }
     }
 }

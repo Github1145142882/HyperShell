@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="@string/hypershell_provision_category_theme">
+        <fan.preference.DropDownPreference
+            android:defaultValue="0"
+            android:key="prefs_key_hypershell_onboarding_theme_source"
+            android:title="@string/hypershell_provision_theme_source"
+            app:entries="@array/hypershell_provision_theme_entries"
+            app:entryValues="@array/hypershell_provision_theme_values" />
+
+        <fan.preference.DropDownPreference
+            android:defaultValue="0"
+            android:key="prefs_key_hypershell_onboarding_brightness"
+            android:title="@string/hypershell_provision_brightness"
+            app:entries="@array/hypershell_provision_brightness_entries"
+            app:entryValues="@array/hypershell_provision_brightness_values" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/hypershell_provision_category_navigation">
+        <fan.preference.DropDownPreference
+            android:defaultValue="0"
+            android:key="prefs_key_hypershell_onboarding_bottom_bar_style"
+            android:title="@string/hypershell_provision_bottom_bar_style"
+            app:entries="@array/hypershell_provision_bottom_bar_entries"
+            app:entryValues="@array/hypershell_provision_bottom_bar_values" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefs_key_hypershell_onboarding_bottom_bar_hdr"
+            android:summary="@string/hypershell_provision_bottom_bar_hdr_summary"
+            android:title="@string/hypershell_provision_bottom_bar_hdr" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/hypershell_provision_category_terminal">
+        <fan.preference.DropDownPreference
+            android:defaultValue="0"
+            android:key="prefs_key_hypershell_onboarding_default_environment"
+            android:title="@string/hypershell_provision_default_environment"
+            app:entries="@array/hypershell_provision_environment_entries"
+            app:entryValues="@array/hypershell_provision_environment_values" />
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="prefs_key_hypershell_onboarding_terminal_hdr"
+            android:title="@string/hypershell_provision_terminal_hdr" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/hypershell_provision_category_files">
+        <fan.preference.DropDownPreference
+            android:defaultValue="1"
+            android:key="prefs_key_hypershell_onboarding_file_layout"
+            android:title="@string/hypershell_provision_file_layout"
+            app:entries="@array/hypershell_provision_file_layout_entries"
+            app:entryValues="@array/hypershell_provision_file_layout_values" />
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="prefs_key_hypershell_onboarding_show_hidden"
+            android:title="@string/hypershell_provision_show_hidden" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/hypershell_provision_category_behavior">
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefs_key_hypershell_onboarding_show_welcome"
+            android:summary="@string/hypershell_provision_show_welcome_summary"
+            android:title="@string/hypershell_provision_show_welcome" />
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="prefs_key_hypershell_onboarding_script_root"
+            android:title="@string/hypershell_provision_script_root" />
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefs_key_hypershell_onboarding_keep_background"
+            android:summary="@string/hypershell_provision_keep_background_summary"
+            android:title="@string/hypershell_provision_keep_background" />
+    </PreferenceCategory>
+</PreferenceScreen>

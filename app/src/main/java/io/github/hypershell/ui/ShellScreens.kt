@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -79,6 +80,9 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.termux.view.TerminalView
 import io.github.hypershell.Confirmation
 import io.github.hypershell.HyperShellUiState
@@ -92,6 +96,7 @@ import io.github.hypershell.files.ZipItem
 import io.github.hypershell.settings.AppSettings
 import io.github.hypershell.settings.BrightnessMode
 import io.github.hypershell.settings.BottomBarStyle
+import io.github.hypershell.settings.DefaultTerminalEnvironment
 import io.github.hypershell.settings.EditorLimit
 import io.github.hypershell.settings.FileSortMode
 import io.github.hypershell.settings.FileLayoutMode
@@ -136,19 +141,27 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.Backup
 import top.yukonga.miuix.kmp.icon.extended.Copy
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Edit
 import top.yukonga.miuix.kmp.icon.extended.File
 import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Home
+import top.yukonga.miuix.kmp.icon.extended.Image
+import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.More
 import top.yukonga.miuix.kmp.icon.extended.MoveFile
+import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Notes
 import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Pin
 import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.icon.extended.RecordingTape
 import top.yukonga.miuix.kmp.icon.extended.Search
+import top.yukonga.miuix.kmp.icon.extended.Share
 import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.icon.extended.Store
 import top.yukonga.miuix.kmp.icon.extended.Unpin
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
@@ -256,6 +269,7 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
     var pathValue by remember(activePane.path) { mutableStateOf(activePane.path) }
     val folderCount = activePane.entries.count { it.kind == FileKind.Directory }
     val fileCount = activePane.entries.size - folderCount
+    val topBarBlurEnabled = state.settings.pageTopBarBlur && !state.settings.bottomBarHdrFeedback
     val fileSurface = MiuixTheme.colorScheme.surface
     val fileBackdrop = rememberLayerBackdrop {
         drawRect(fileSurface)
@@ -264,7 +278,7 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
     KitPage(
         title = activePane.path,
         subtitle = "$folderCount 个文件夹  ·  $fileCount 个文件",
-        blur = state.settings.pageTopBarBlur,
+        blur = topBarBlurEnabled,
         bottomPadding = bottomPadding,
         compact = true,
         compactTitleContent = {
@@ -291,7 +305,7 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
             }
         },
         backdropOverride = if (
-            state.settings.pageTopBarBlur &&
+            topBarBlurEnabled &&
                 Build.VERSION.SDK_INT >= 33 && isRenderEffectSupported()
         ) fileBackdrop else null,
         captureBackdrop = false,
@@ -368,6 +382,8 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
                     FilePane(
                         pane = activePane,
                         active = true,
+                        colorfulTheme = state.settings.colorfulFileTheme,
+                        imageThumbnails = state.imageThumbnails,
                         rootAccess = state.rootAccess,
                         vm = vm,
                         contentTop = listTop,
@@ -379,6 +395,8 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
                         FilePane(
                             pane = state.fileBrowser.left,
                             active = state.fileBrowser.activePane == FilePaneId.Left,
+                            colorfulTheme = state.settings.colorfulFileTheme,
+                            imageThumbnails = state.imageThumbnails,
                             rootAccess = state.rootAccess,
                             vm = vm,
                             contentTop = listTop,
@@ -403,6 +421,8 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
                         FilePane(
                             pane = state.fileBrowser.right,
                             active = state.fileBrowser.activePane == FilePaneId.Right,
+                            colorfulTheme = state.settings.colorfulFileTheme,
+                            imageThumbnails = state.imageThumbnails,
                             rootAccess = state.rootAccess,
                             vm = vm,
                             contentTop = listTop,
@@ -492,6 +512,8 @@ fun FilesPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: 
 private fun FilePane(
     pane: FilePaneState,
     active: Boolean,
+    colorfulTheme: Boolean,
+    imageThumbnails: Map<String, String>,
     rootAccess: RootAccess,
     vm: HyperShellViewModel,
     contentTop: Dp,
@@ -501,7 +523,7 @@ private fun FilePane(
     val listState = rememberLazyListState()
     val animatedEntries = remember(pane.path, pane.generation) { mutableSetOf<String>() }
     val activeOverlayAlpha by animateFloatAsState(
-        targetValue = if (active) 0.055f else 0f,
+        targetValue = if (active) 0.025f else 0f,
         animationSpec = tween(durationMillis = 180),
         label = "active-pane-${pane.id}",
     )
@@ -536,9 +558,12 @@ private fun FilePane(
                 items(pane.entries, key = RootFileEntry::path) { entry ->
                     FileRow(
                         entry = entry,
+                        colorfulTheme = colorfulTheme,
+                        thumbnailPath = imageThumbnails[entry.path],
                         selected = entry.path in pane.selectedPaths,
                         animateRead = pane.loading && !listState.isScrollInProgress && animatedEntries.add(entry.path),
                         onLongClick = { vm.toggleFileSelection(pane.id, entry.path) },
+                        onRequestThumbnail = { vm.ensureImageThumbnail(entry) },
                     ) {
                         vm.activateFilePane(pane.id)
                         if (pane.selectedPaths.isNotEmpty()) vm.toggleFileSelection(pane.id, entry.path) else vm.openEntry(entry)
@@ -556,10 +581,13 @@ private fun FilePane(
 @Composable
 private fun FileRow(
     entry: RootFileEntry,
+    colorfulTheme: Boolean,
+    thumbnailPath: String?,
     modifier: Modifier = Modifier,
     animateRead: Boolean = false,
     selected: Boolean = false,
     onLongClick: () -> Unit = {},
+    onRequestThumbnail: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     var appeared by remember(entry.path) { mutableStateOf(!animateRead) }
@@ -569,7 +597,40 @@ private fun FileRow(
         animationSpec = tween(140),
         label = "file-read-${entry.path}",
     )
-    val icon = if (entry.kind == FileKind.Directory) MiuixIcons.Folder else MiuixIcons.File
+    val visual = classifyFileVisual(entry)
+    LaunchedEffect(entry.path, entry.size, entry.modifiedAt, thumbnailPath) {
+        if (visual == FileVisualKind.Image && thumbnailPath == null) onRequestThumbnail()
+    }
+    val icon = when (visual) {
+        FileVisualKind.Folder -> MiuixIcons.Folder
+        FileVisualKind.SymbolicLink -> MiuixIcons.Link
+        FileVisualKind.Image -> MiuixIcons.Image
+        FileVisualKind.Audio -> MiuixIcons.Music
+        FileVisualKind.Video -> MiuixIcons.RecordingTape
+        FileVisualKind.Archive -> MiuixIcons.Backup
+        FileVisualKind.Package -> MiuixIcons.Store
+        FileVisualKind.Text -> MiuixIcons.Notes
+        FileVisualKind.Generic -> MiuixIcons.File
+    }
+    // The optional colorful style is intentionally independent from Monet. Each file kind
+    // keeps a stable, recognizable color across wallpapers and theme palette changes.
+    val colorfulTint = when (visual) {
+        FileVisualKind.Folder -> Color(0xFFFFB340)
+        FileVisualKind.SymbolicLink -> Color(0xFF00A7C4)
+        FileVisualKind.Image -> Color(0xFFFF5A8A)
+        FileVisualKind.Audio -> Color(0xFF9B6CFF)
+        FileVisualKind.Video -> Color(0xFFFF5B45)
+        FileVisualKind.Archive -> Color(0xFF00B87A)
+        FileVisualKind.Package -> Color(0xFF2F80ED)
+        FileVisualKind.Text -> Color(0xFF18A0AE)
+        FileVisualKind.Generic -> Color(0xFF7B8290)
+    }
+    val iconTint = (if (colorfulTheme) colorfulTint else when (visual) {
+        FileVisualKind.Folder -> MiuixTheme.colorScheme.primary
+        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary
+    }).let { tint ->
+        if (visual == FileVisualKind.Folder && entry.name.startsWith('.')) tint.copy(alpha = 0.72f) else tint
+    }
     val detail = buildString {
         if (entry.modifiedAt != java.time.Instant.EPOCH) append(entry.modifiedAt.toString().take(16).replace('T', ' '))
         if (entry.kind == FileKind.Regular && entry.size >= 0) {
@@ -584,11 +645,36 @@ private fun FileRow(
             .fillMaxWidth()
             .heightIn(min = 58.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .background(
+                if (selected) {
+                    (if (colorfulTheme) colorfulTint else MiuixTheme.colorScheme.primary).copy(alpha = 0.14f)
+                } else {
+                    Color.Transparent
+                },
+            )
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, modifier = Modifier.size(34.dp), tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        val thumbnail = thumbnailPath?.let(::JavaFile)?.takeIf(JavaFile::isFile)
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, null, modifier = Modifier.size(30.dp), tint = iconTint)
+            if (visual == FileVisualKind.Image && thumbnail != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(thumbnail)
+                        .crossfade(120)
+                        .build(),
+                    contentDescription = entry.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
         Column(Modifier.padding(start = 9.dp).weight(1f)) {
             Text(
                 entry.name,
@@ -607,7 +693,7 @@ private fun ParentDirectoryRow(onClick: () -> Unit) {
         Modifier.fillMaxWidth().heightIn(min = 58.dp).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(MiuixIcons.Folder, null, modifier = Modifier.size(34.dp), tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        Icon(MiuixIcons.Folder, null, modifier = Modifier.size(30.dp), tint = MiuixTheme.colorScheme.primary)
         Text("..", modifier = Modifier.padding(start = 9.dp), style = MiuixTheme.textStyles.body1)
     }
 }
@@ -712,27 +798,6 @@ private fun RootStateCard(text: String, retry: () -> Unit) {
 @Composable
 fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: Dp) {
     LaunchedEffect(Unit) { vm.ensureTerminal() }
-    var ctrlArmed by remember { mutableStateOf(false) }
-    var altArmed by remember { mutableStateOf(false) }
-    val sendInput: (String) -> Unit = { raw ->
-        var value = raw
-        if (ctrlArmed && value.isNotEmpty()) {
-            val first = value.first()
-            val control = when {
-                first in 'a'..'z' -> (first.code - 'a'.code + 1).toChar()
-                first in 'A'..'Z' -> (first.code - 'A'.code + 1).toChar()
-                first == ' ' -> '\u0000'
-                else -> first
-            }
-            value = control + value.drop(1)
-            ctrlArmed = false
-        }
-        if (altArmed && value.isNotEmpty()) {
-            value = "\u001b$value"
-            altArmed = false
-        }
-        vm.sendRawInput(value)
-    }
     KitPage(
         title = "终端",
         subtitle = terminalSubtitle(
@@ -741,7 +806,7 @@ fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPaddin
             state.terminalRuntime,
             state.linuxBackend,
         ),
-        blur = state.settings.terminalTopBlur,
+        blur = state.settings.terminalTopBlur && !state.settings.bottomBarHdrFeedback,
         bottomPadding = bottomPadding,
         compact = true,
         actions = {
@@ -793,17 +858,14 @@ fun TerminalPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPaddin
                 contentTopInset = scaffoldPadding.calculateTopPadding() + 12.dp,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 66.dp),
+                    .padding(bottom = 84.dp),
             )
             TerminalKeys(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = 12.dp),
-                ctrlArmed = ctrlArmed,
-                altArmed = altArmed,
-                toggleCtrl = { ctrlArmed = !ctrlArmed },
-                toggleAlt = { altArmed = !altArmed },
-                sendInput = sendInput,
+                    .padding(horizontal = 10.dp, vertical = 12.dp),
+                ctrlArmed = state.terminalControlArmed,
+                altArmed = state.terminalAltArmed,
                 vm = vm,
             )
         }
@@ -1069,43 +1131,93 @@ private fun TerminalKeys(
     modifier: Modifier = Modifier,
     ctrlArmed: Boolean,
     altArmed: Boolean,
-    toggleCtrl: () -> Unit,
-    toggleAlt: () -> Unit,
-    sendInput: (String) -> Unit,
     vm: HyperShellViewModel,
 ) {
-    Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(onClick = { sendInput("\u001b") }) { Text("ESC") }
-        Button(onClick = toggleCtrl) { Text(if (ctrlArmed) "CTRL ●" else "CTRL") }
-        Button(onClick = toggleAlt) { Text(if (altArmed) "ALT ●" else "ALT") }
-        Button(onClick = { sendInput("\t") }) { Text("TAB") }
-        Button(onClick = { sendInput("-") }) { Text("-") }
-        Button(onClick = { sendInput("/") }) { Text("/") }
-        Button(onClick = { sendInput("|") }) { Text("|") }
-        Button(onClick = { vm.interruptTerminal() }) { Text("CTRL+C") }
-        listOf(
-            "HOME" to "\u001b[H",
-            "↑" to "\u001b[A",
-            "END" to "\u001b[F",
-            "PGUP" to "\u001b[5~",
-            "←" to "\u001b[D",
-            "↓" to "\u001b[B",
-            "→" to "\u001b[C",
-            "PGDN" to "\u001b[6~",
-        ).forEach { (label, sequence) ->
-            Button(onClick = { vm.sendTerminalKey(sequence) }) { Text(label) }
+    Card(
+        modifier = modifier.fillMaxWidth().height(50.dp),
+        insideMargin = PaddingValues(4.dp),
+        colors = CardDefaults.defaultColors(
+            color = MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f),
+            contentColor = MiuixTheme.colorScheme.onSurface,
+        ),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TerminalKey("ESC", 48.dp) { vm.sendTerminalKey("\u001b") }
+            TerminalKey("CTRL", 58.dp, active = ctrlArmed) { vm.toggleTerminalControlKey() }
+            TerminalKey("ALT", 48.dp, active = altArmed) { vm.toggleTerminalAltKey() }
+            TerminalKey("TAB", 48.dp) { vm.sendTerminalKey("\t") }
+            TerminalKey("C-c", 48.dp, accent = true) { vm.interruptTerminal() }
+            Spacer(
+                Modifier
+                    .padding(horizontal = 3.dp)
+                    .width(1.dp)
+                    .height(22.dp)
+                    .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.28f)),
+            )
+            listOf("←" to "\u001b[D", "↑" to "\u001b[A", "↓" to "\u001b[B", "→" to "\u001b[C")
+                .forEach { (label, sequence) ->
+                    TerminalKey(label, 42.dp) { vm.sendTerminalKey(sequence) }
+                }
         }
     }
 }
 
 @Composable
-fun SettingsPage(settings: AppSettings, vm: HyperShellViewModel, bottomPadding: Dp, openAppearance: () -> Unit) {
-    KitPage("设置", settings.pageTopBarBlur, bottomPadding) { modifier, scaffoldPadding, navigationPadding, scroll, _ ->
+private fun TerminalKey(
+    label: String,
+    width: Dp,
+    active: Boolean = false,
+    accent: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val keyShape = RoundedCornerShape(13.dp)
+    val background = if (active) {
+        MiuixTheme.colorScheme.primary.copy(alpha = 0.22f)
+    } else {
+        Color.Transparent
+    }
+    val contentColor = if (active || accent) {
+        MiuixTheme.colorScheme.primary
+    } else {
+        MiuixTheme.colorScheme.onSurface
+    }
+    Box(
+        modifier = Modifier
+            .width(width)
+            .fillMaxHeight()
+            .clip(keyShape)
+            .background(background)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            maxLines = 1,
+            color = contentColor,
+            style = MiuixTheme.textStyles.footnote1,
+            fontWeight = if (active || accent) FontWeight.SemiBold else FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+fun SettingsPage(
+    settings: AppSettings,
+    vm: HyperShellViewModel,
+    bottomPadding: Dp,
+    openAppearance: () -> Unit,
+    openOnboarding: () -> Unit,
+) {
+    KitPage("设置", settings.pageTopBarBlur && !settings.bottomBarHdrFeedback, bottomPadding) { modifier, scaffoldPadding, navigationPadding, scroll, _ ->
         LazyColumn(
             modifier = modifier.fillMaxHeight().padding(horizontal = 12.dp).scrollEndHaptic().overScrollVertical().nestedScroll(scroll.nestedScrollConnection),
             contentPadding = PaddingValues(
                 top = scaffoldPadding.calculateTopPadding() + 12.dp,
-                bottom = navigationPadding,
+                bottom = navigationPadding + 12.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             overscrollEffect = null,
@@ -1113,16 +1225,39 @@ fun SettingsPage(settings: AppSettings, vm: HyperShellViewModel, bottomPadding: 
             item {
                 Card(Modifier.fillMaxWidth()) {
                     SwitchPreference(settings.showHiddenFiles, { v -> vm.updateSettings { it.copy(showHiddenFiles = v) } }, "显示隐藏文件")
+                    SwitchPreference(
+                        settings.colorfulFileTheme,
+                        { enabled -> vm.updateSettings { it.copy(colorfulFileTheme = enabled) } },
+                        "多彩文件主题",
+                        summary = "按图片、音频、视频、归档和代码等类型使用主题强调色",
+                    )
                     OverlayDropdownPreference(listOf("单窗格", "双窗格"), settings.fileLayoutMode.ordinal, "文件布局", onSelectedIndexChange = { i -> vm.updateSettings { it.copy(fileLayoutMode = FileLayoutMode.entries[i]) } })
                     OverlayDropdownPreference(listOf("名称", "修改时间", "大小"), settings.fileSortMode.ordinal, "默认排序", onSelectedIndexChange = { i -> vm.updateSettings { it.copy(fileSortMode = FileSortMode.entries[i]) } })
                     OverlayDropdownPreference(EditorLimit.entries.map { "${it.mebibytes} MiB" }, settings.editorLimit.ordinal, "编辑上限", onSelectedIndexChange = { i -> vm.updateSettings { it.copy(editorLimit = EditorLimit.entries[i]) } })
                     SwitchPreference(settings.scriptUseRoot, { v -> vm.updateSettings { it.copy(scriptUseRoot = v) } }, "脚本默认使用 Root")
                     SwitchPreference(settings.scriptPermission == ScriptPermission.Temporary0777, { v -> vm.updateSettings { it.copy(scriptPermission = if (v) ScriptPermission.Temporary0777 else ScriptPermission.Unchanged) } }, "脚本默认临时 0777")
+                    OverlayDropdownPreference(
+                        listOf("Termux", "Debian 13"),
+                        settings.defaultTerminalEnvironment.ordinal,
+                        "默认终端环境",
+                        onSelectedIndexChange = { index ->
+                            vm.updateSettings {
+                                it.copy(defaultTerminalEnvironment = DefaultTerminalEnvironment.entries[index])
+                            }
+                        },
+                    )
                 }
             }
             item {
                 Card(Modifier.fillMaxWidth()) {
+                    SwitchPreference(
+                        settings.showWelcomeOnLaunch,
+                        { enabled -> vm.updateSettings { it.copy(showWelcomeOnLaunch = enabled) } },
+                        "每次启动显示欢迎页",
+                        summary = "以首次引导相同的动画过渡进入 HyperShell",
+                    )
                     ArrowPreference(title = "外观", summary = "主题、配色、模糊和悬浮底栏", onClick = openAppearance)
+                    ArrowPreference(title = "首次启动引导", summary = "重新查看运行环境说明与基础设置", onClick = openOnboarding)
                 }
             }
         }
@@ -1162,19 +1297,6 @@ fun AppearancePage(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             overscrollEffect = null,
         ) {
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("HyperShell", style = MiuixTheme.textStyles.title2)
-                        Text("${settings.paletteStyle} · ${settings.colorSpec}", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.secondary, MiuixTheme.colorScheme.surfaceContainer).forEach { color ->
-                                Box(Modifier.weight(1f).height(44.dp).background(color, androidx.compose.foundation.shape.CircleShape))
-                            }
-                        }
-                    }
-                }
-            }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     OverlayDropdownPreference(listOf("标准 Miuix", "Monet 动态色"), settings.themeSource.ordinal, "配色来源", onSelectedIndexChange = { i -> updateSettings { it.copy(themeSource = ThemeSource.entries[i]) } })
@@ -1257,8 +1379,18 @@ fun AppearancePage(
                         steps = 15,
                         enabled = settings.terminalBackgroundImagePath != null,
                     )
-                    SwitchPreference(settings.pageTopBarBlur, { v -> updateSettings { it.copy(pageTopBarBlur = v) } }, "页面顶栏模糊")
-                    SwitchPreference(settings.terminalTopBlur, { v -> updateSettings { it.copy(terminalTopBlur = v) } }, "终端顶栏模糊")
+                    SwitchPreference(
+                        settings.pageTopBarBlur,
+                        { v -> updateSettings { it.copy(pageTopBarBlur = v) } },
+                        "页面顶栏模糊",
+                        summary = if (settings.bottomBarHdrFeedback) "沉浸光感 HDR 开启时自动暂停，避免顶栏误亮" else "文件与设置页面使用背景模糊",
+                    )
+                    SwitchPreference(
+                        settings.terminalTopBlur,
+                        { v -> updateSettings { it.copy(terminalTopBlur = v) } },
+                        "终端顶栏模糊",
+                        summary = if (settings.bottomBarHdrFeedback) "沉浸光感 HDR 开启时自动暂停，避免顶栏误亮" else "终端页面使用背景模糊",
+                    )
                     OverlayDropdownPreference(
                         listOf("液态玻璃", "悬浮纯色", "标准导航栏"),
                         settings.bottomBarStyle.ordinal,
@@ -1434,7 +1566,7 @@ private fun TerminalFontPreview(settings: AppSettings) {
 @Composable
 private fun EditorPage(state: HyperShellUiState, vm: HyperShellViewModel, bottomPadding: Dp) {
     val title = state.document?.path?.substringAfterLast('/') ?: state.textPage?.path?.substringAfterLast('/') ?: "文本"
-    KitPage(title, state.settings.pageTopBarBlur, bottomPadding, navigation = { IconButton(onClick = vm::closeDocument) { Icon(MiuixIcons.Back, "关闭") } }) { modifier, scaffoldPadding, navigationPadding, _, _ ->
+    KitPage(title, state.settings.pageTopBarBlur && !state.settings.bottomBarHdrFeedback, bottomPadding, navigation = { IconButton(onClick = vm::closeDocument) { Icon(MiuixIcons.Back, "关闭") } }) { modifier, scaffoldPadding, navigationPadding, _, _ ->
         Column(
             modifier.padding(
                 start = 12.dp,
@@ -1460,7 +1592,7 @@ private fun EditorPage(state: HyperShellUiState, vm: HyperShellViewModel, bottom
 
 @Composable
 fun ZipPreviewPage(state: HyperShellUiState, vm: HyperShellViewModel, back: () -> Unit) {
-    KitPage(state.zipArchive?.name ?: "ZIP 预览", state.settings.pageTopBarBlur, 0.dp, navigation = { IconButton(onClick = back) { Icon(MiuixIcons.Back, "返回") } }) { modifier, scaffoldPadding, navigationPadding, scroll, _ ->
+    KitPage(state.zipArchive?.name ?: "ZIP 预览", state.settings.pageTopBarBlur && !state.settings.bottomBarHdrFeedback, 0.dp, navigation = { IconButton(onClick = back) { Icon(MiuixIcons.Back, "返回") } }) { modifier, scaffoldPadding, navigationPadding, scroll, _ ->
         LazyColumn(
             modifier = modifier.padding(horizontal = 12.dp).scrollEndHaptic().overScrollVertical().nestedScroll(scroll.nestedScrollConnection),
             contentPadding = PaddingValues(
@@ -1565,6 +1697,7 @@ fun FileActionOverlay(
     var permissionDialog by remember { mutableStateOf(false) }
     var modeValue by remember(action?.entry?.path) { mutableStateOf(action?.entry?.mode.orEmpty().ifBlank { "0644" }) }
     var ownershipDialog by remember { mutableStateOf(false) }
+    var openWithDialog by remember(action?.entry?.path) { mutableStateOf(false) }
     var ownerValue by remember(action?.entry?.path) { mutableStateOf(action?.entry?.owner.orEmpty().ifBlank { "root" }) }
     var groupValue by remember(action?.entry?.path) { mutableStateOf(action?.entry?.group.orEmpty().ifBlank { "root" }) }
     val sheetShape = remember { RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp) }
@@ -1593,6 +1726,7 @@ fun FileActionOverlay(
         onDismissFinished = {
             if (dismissRequested) vm.dismissFileAction()
             dismissRequested = false
+            openWithDialog = false
             if (state.fileAction == null) retainedAction = null
         },
     ) {
@@ -1602,6 +1736,9 @@ fun FileActionOverlay(
             if (action.probe.validUtf8Text) {
                 add(FileQuickAction(MiuixIcons.File, "查看") { vm.openSelectedFile(false) })
                 add(FileQuickAction(MiuixIcons.Edit, "编辑") { vm.openSelectedFile(true) })
+            }
+            if (action.entry.kind == FileKind.Regular) {
+                add(FileQuickAction(MiuixIcons.Share, "打开方式") { openWithDialog = true })
             }
             add(FileQuickAction(if (bookmarked) MiuixIcons.Unpin else MiuixIcons.Pin, if (bookmarked) "取消书签" else "添加书签") {
                 vm.toggleBookmark(action.entry.path)
@@ -1730,6 +1867,30 @@ fun FileActionOverlay(
             }
         }
     }
+    OverlayDialog(
+        show = openWithDialog && action != null,
+        onDismissRequest = { openWithDialog = false },
+        title = "打开方式",
+        summary = "“始终”将使用 Android / HyperOS 原生解析器保存默认应用，可稍后在系统应用设置中清除。",
+        content = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        openWithDialog = false
+                        vm.openSelectedFileExternally(always = false)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text("仅此一次") }
+                Button(
+                    onClick = {
+                        openWithDialog = false
+                        vm.openSelectedFileExternally(always = true)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text("始终") }
+            }
+        },
+    )
     OverlayDialog(
         show = renameDialog && action != null,
         onDismissRequest = { renameDialog = false },

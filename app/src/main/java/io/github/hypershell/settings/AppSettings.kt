@@ -7,6 +7,7 @@ enum class BrightnessMode { System, Light, Dark }
 enum class FileSortMode { Name, Modified, Size }
 enum class FileLayoutMode { Single, Dual }
 enum class BottomBarStyle { LiquidGlass, FloatingSolid, StandardNavigation }
+enum class DefaultTerminalEnvironment { Termux, Debian }
 enum class TerminalFont { SystemMono, SansMono, SerifMono, MiSans, Custom }
 enum class EditorLimit(val mebibytes: Int) {
     MiB1(1), MiB4(4), MiB8(8), MiB16(16);
@@ -24,12 +25,13 @@ data class ScriptExecutionOptions(
 
 data class AppSettings(
     val showHiddenFiles: Boolean = true,
+    val colorfulFileTheme: Boolean = false,
     val fileLayoutMode: FileLayoutMode = FileLayoutMode.Dual,
     val fileSortMode: FileSortMode = FileSortMode.Name,
     val editorLimit: EditorLimit = EditorLimit.MiB4,
     val scriptUseRoot: Boolean = true,
     val scriptPermission: ScriptPermission = ScriptPermission.Unchanged,
-    val themeSource: ThemeSource = ThemeSource.Monet,
+    val themeSource: ThemeSource = ThemeSource.Standard,
     val brightnessMode: BrightnessMode = BrightnessMode.System,
     val terminalFontSize: Float = 13f,
     val pageTopBarBlur: Boolean = true,
@@ -37,7 +39,9 @@ data class AppSettings(
     val paletteStyle: String = "TonalSpot",
     val colorSpec: String = "Spec2021",
     val bottomBarStyle: BottomBarStyle = BottomBarStyle.LiquidGlass,
-    val bottomBarHdrFeedback: Boolean = true,
+    val bottomBarHdrFeedback: Boolean = false,
+    val showWelcomeOnLaunch: Boolean = false,
+    val defaultTerminalEnvironment: DefaultTerminalEnvironment = DefaultTerminalEnvironment.Termux,
     val terminalTopBlur: Boolean = true,
     val keepTerminalInBackground: Boolean = false,
     val terminalBackgroundColor: Int = 0xFF000000.toInt(),
@@ -57,5 +61,5 @@ fun AppSettings.colorSchemeMode(): ColorSchemeMode = when (themeSource to bright
     ThemeSource.Monet to BrightnessMode.System -> ColorSchemeMode.MonetSystem
     ThemeSource.Monet to BrightnessMode.Light -> ColorSchemeMode.MonetLight
     ThemeSource.Monet to BrightnessMode.Dark -> ColorSchemeMode.MonetDark
-    else -> ColorSchemeMode.MonetSystem
+    else -> ColorSchemeMode.System
 }

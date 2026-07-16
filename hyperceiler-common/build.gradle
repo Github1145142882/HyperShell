@@ -1,0 +1,52 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.sevtinge.hyperceiler.common'
+    compileSdk 37
+
+    defaultConfig {
+        minSdk 35
+        buildConfigField 'String', 'APP_MODULE_ID', '"com.sevtinge.hyperceiler"'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile rootProject.file('third_party/HyperCeiler/library/common/src/main/AndroidManifest.xml')
+            java.srcDirs = [rootProject.file('third_party/HyperCeiler/library/common/src/main/java')]
+            kotlin.srcDirs = [rootProject.file('third_party/HyperCeiler/library/common/src/main/java')]
+            res.srcDirs = [rootProject.file('third_party/HyperCeiler/library/common/src/main/res')]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    def fanMiuixVersion = '1.0.12.5'
+    api "fan.miuix:animation:$fanMiuixVersion"
+    api "fan.miuix:appcompat:$fanMiuixVersion"
+    api "fan.miuix:basewidget:$fanMiuixVersion"
+    api "fan.miuix:bottomsheet:$fanMiuixVersion"
+    api "fan.miuix:cardview:$fanMiuixVersion"
+    api "fan.miuix:core:$fanMiuixVersion"
+    api "fan.miuix:folme:$fanMiuixVersion"
+    api "fan.miuix:navigator:$fanMiuixVersion"
+    api "fan.miuix:nestedheader:$fanMiuixVersion"
+    api "fan.miuix:pickerwidget:$fanMiuixVersion"
+    api "fan.miuix:preference:$fanMiuixVersion"
+    api "fan.miuix:recyclerview:$fanMiuixVersion"
+    api "fan.miuix:springback:$fanMiuixVersion"
+    api "fan.miuix:theme:$fanMiuixVersion"
+    api "fan.miuix:viewpager:$fanMiuixVersion"
+    api "fan.miuix:transition:$fanMiuixVersion"
+    compileOnlyApi 'io.github.libxposed:api:101.0.1'
+}

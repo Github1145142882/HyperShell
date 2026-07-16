@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="provision_permission_settings_title">访问设置</string>
+    <string name="provision_permission_internet">网络访问</string>
+    <string name="provision_permission_root">验证 Root 文件访问</string>
+    <string name="provision_permission_installed_apps">本地数据最小化</string>
+    <string name="provision_set_permission_later">Root 权限由 KernelSU 或 Magisk 管理。点按下方项目可验证管理器预先授予的 UID。</string>
+    <string name="provision_congratulation_label">欢迎来到 HyperShell</string>
+    <string name="provision_complete_text">开始使用 HyperShell</string>
+
+    <string name="hypershell_provision_category_theme">主题</string>
+    <string name="hypershell_provision_category_files">文件</string>
+    <string name="hypershell_provision_category_navigation">导航与动效</string>
+    <string name="hypershell_provision_category_terminal">终端</string>
+    <string name="hypershell_provision_category_behavior">运行方式</string>
+    <string name="hypershell_provision_theme_source">配色来源</string>
+    <string name="hypershell_provision_brightness">明暗模式</string>
+    <string name="hypershell_provision_file_layout">文件布局</string>
+    <string name="hypershell_provision_show_hidden">显示隐藏文件</string>
+    <string name="hypershell_provision_script_root">脚本默认使用 Root</string>
+    <string name="hypershell_provision_keep_background">终端保留后台</string>
+    <string name="hypershell_provision_keep_background_summary">关闭时，HyperShell 离开前台后会终止终端进程。</string>
+    <string name="hypershell_provision_bottom_bar_style">导航栏类型</string>
+    <string name="hypershell_provision_bottom_bar_hdr">液态玻璃 HDR 点击反馈</string>
+    <string name="hypershell_provision_bottom_bar_hdr_summary">液态玻璃控件的高亮度点击反馈（Beta）。</string>
+    <string name="hypershell_provision_terminal_hdr">终端文字 HDR</string>
+    <string name="hypershell_provision_default_environment">默认环境</string>
+    <string name="hypershell_provision_show_welcome">每次启动显示欢迎页</string>
+    <string name="hypershell_provision_show_welcome_summary">使用首次引导相同的动画进入 HyperShell。</string>
+
+    <string-array name="hypershell_provision_theme_entries">
+        <item>标准 Miuix</item>
+        <item>Monet 动态色</item>
+    </string-array>
+    <string-array name="hypershell_provision_brightness_entries">
+        <item>跟随系统</item>
+        <item>浅色</item>
+        <item>深色</item>
+    </string-array>
+    <string-array name="hypershell_provision_file_layout_entries">
+        <item>单窗格</item>
+        <item>双窗格</item>
+    </string-array>
+    <string-array name="hypershell_provision_bottom_bar_entries">
+        <item>液态玻璃</item>
+        <item>悬浮纯色</item>
+        <item>标准导航栏</item>
+    </string-array>
+    <string-array name="hypershell_provision_environment_entries">
+        <item>Termux</item>
+        <item>Debian 13</item>
+    </string-array>
+</resources>

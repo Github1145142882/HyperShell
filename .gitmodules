@@ -3,4 +3,8 @@
 	url = https://github.com/termux/termux-app.git
 [submodule "third_party/termux-packages"]
 	path = third_party/termux-packages
-	url = https://github.com/termux/termux-packages.git
+	url = https://github.com/Github1145142882/termux-packages.git
+	branch = hypershell-prefix
+[submodule "third_party/HyperCeiler"]
+	path = third_party/HyperCeiler
+	url = https://github.com/ReChronoRain/HyperCeiler.git

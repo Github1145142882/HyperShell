@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="HyperShellProvisionStartupTheme" parent="ProvisionTheme">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowTranslucentNavigation">true</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <string name="provision_permission_settings_title">Access settings</string>
+    <string name="provision_permission_internet">Network access</string>
+    <string name="provision_permission_root">Verify Root access</string>
+    <string name="provision_permission_installed_apps">Local data minimization</string>
+    <string name="provision_set_permission_later">Root access is managed by KernelSU or Magisk. Tap the item below to verify the pre-authorized UID.</string>
+    <string name="provision_congratulation_label">Welcome to HyperShell</string>
+    <string name="provision_complete_text">Enter HyperShell</string>
+
+    <string name="hypershell_provision_category_theme">Theme</string>
+    <string name="hypershell_provision_category_files">Files</string>
+    <string name="hypershell_provision_category_navigation">Navigation and effects</string>
+    <string name="hypershell_provision_category_terminal">Terminal</string>
+    <string name="hypershell_provision_category_behavior">Behavior</string>
+    <string name="hypershell_provision_theme_source">Color source</string>
+    <string name="hypershell_provision_brightness">Brightness</string>
+    <string name="hypershell_provision_file_layout">File layout</string>
+    <string name="hypershell_provision_show_hidden">Show hidden files</string>
+    <string name="hypershell_provision_script_root">Use Root for scripts by default</string>
+    <string name="hypershell_provision_keep_background">Keep terminal in background</string>
+    <string name="hypershell_provision_keep_background_summary">When disabled, terminal processes stop after HyperShell leaves the foreground.</string>
+    <string name="hypershell_provision_bottom_bar_style">Navigation bar type</string>
+    <string name="hypershell_provision_bottom_bar_hdr">Liquid glass HDR feedback</string>
+    <string name="hypershell_provision_bottom_bar_hdr_summary">Beta high-brightness press feedback for liquid glass controls.</string>
+    <string name="hypershell_provision_terminal_hdr">Terminal text HDR</string>
+    <string name="hypershell_provision_default_environment">Default environment</string>
+    <string name="hypershell_provision_show_welcome">Show welcome page on every launch</string>
+    <string name="hypershell_provision_show_welcome_summary">Use the onboarding animation before entering HyperShell.</string>
+
+    <string-array name="hypershell_provision_theme_entries">
+        <item>Standard Miuix</item>
+        <item>Monet dynamic color</item>
+    </string-array>
+    <string-array name="hypershell_provision_theme_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+    <string-array name="hypershell_provision_brightness_entries">
+        <item>Follow system</item>
+        <item>Light</item>
+        <item>Dark</item>
+    </string-array>
+    <string-array name="hypershell_provision_brightness_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="hypershell_provision_file_layout_entries">
+        <item>Single pane</item>
+        <item>Dual pane</item>
+    </string-array>
+    <string-array name="hypershell_provision_file_layout_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+    <string-array name="hypershell_provision_bottom_bar_entries">
+        <item>Liquid glass</item>
+        <item>Floating solid</item>
+        <item>Standard navigation</item>
+    </string-array>
+    <string-array name="hypershell_provision_bottom_bar_values">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+    <string-array name="hypershell_provision_environment_entries">
+        <item>Termux</item>
+        <item>Debian 13</item>
+    </string-array>
+    <string-array name="hypershell_provision_environment_values">
+        <item>0</item>
+        <item>1</item>
+    </string-array>
+</resources>

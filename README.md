@@ -9,6 +9,7 @@
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-Compose-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Miuix](https://img.shields.io/badge/UI-Miuix_0.9.3-5B6BF9)](https://github.com/compose-miuix-ui/miuix)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Github1145142882/HyperShell?display_name=tag)](https://github.com/Github1145142882/HyperShell/releases/latest)
 
 ### [下载最新版本](https://github.com/Github1145142882/HyperShell/releases/latest)
@@ -35,6 +36,7 @@
 - **Termux 兼容终端**：交互式 PTY、ANSI/256 色、快捷按键、触摸滚动、双指缩放与软键盘输入。
 - **Linux 环境**：支持应用终端以及 Root chroot / proot 兼容模式切换；实际可用能力取决于设备内核、Root 实现与已安装环境。
 - **Root 文件浏览**：目录浏览、搜索、排序、书签、文本查看与编辑，并可处理 Shell 脚本和 ZIP 内容。
+- **双窗格文件管理**：左右窗格独立导航，支持跨窗格复制/移动、文件类型固定多彩标识和圆角图片缩略图。
 - **脚本执行**：支持普通或 Root 执行；临时权限变更会记录原权限并在任务结束后恢复。
 - **HyperOS 风格界面**：使用 Miuix 组件、Monet 动态色、深浅模式、悬浮液态玻璃底栏与可选 HDR 反馈。
 - **终端外观**：字体、字号、背景色、背景图片、压暗与模糊均可调整。
@@ -84,12 +86,22 @@ https://raw.githubusercontent.com/Github1145142882/HyperShell/gh-pages/
 
 HyperShell 不会隐藏应用或进程、擦除系统审计日志、伪装包特征，也不会绕过 Magisk / KernelSU 的授权。项目所说的“少留痕迹”仅指应用自身不持久化命令历史、终端输出或无必要的后台任务。
 
+## 开源许可
+
+HyperShell 采用 [GNU Affero General Public License v3](LICENSE)。首次启动引导直接改造自 HyperCeiler `library/provision` 模块的固定提交，来源、版权和许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 致谢
 
 - [Miuix](https://github.com/compose-miuix-ui/miuix) — HyperOS 风格 Compose 组件
 - [KernelSU-Style-UI-Kit](https://github.com/chenaizhang/KernelSU-Style-UI-Kit) — 界面与动效设计参考
+- [HyperCeiler](https://github.com/ReChronoRain/HyperCeiler) — 首次启动引导、欢迎动效、页面状态机与完成页的改造来源（AGPL-3.0）
 - [Termux](https://github.com/termux/termux-app) 与 [termux-packages](https://github.com/termux/termux-packages) — 终端组件与软件包构建基础
-- Android、Kotlin、Jetpack Compose 及相关开源项目贡献者
+- [Coil](https://github.com/coil-kt/coil) — 文件列表图片缩略图的异步解码与缓存
+- [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) — 无系统 `zip` 依赖的 ZIP/TAR 流式处理
+- [Debian](https://www.debian.org/) — Debian 13 用户空间与官方软件源
+- Android、Kotlin、Jetpack Compose、AndroidX 及所有相关开源项目贡献者
+
+完整第三方来源与许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 反馈
 

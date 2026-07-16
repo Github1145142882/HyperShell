@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 28
         versionCode = 27
-        versionName = "1.5.1"
+        versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         externalNativeBuild {
@@ -53,6 +53,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            providers.gradleProperty("debugApplicationIdSuffix").orNull?.let { suffix ->
+                applicationIdSuffix = suffix
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -90,6 +95,19 @@ dependencies {
     implementation(libs.navigation3.runtime)
     implementation(libs.navigation3.ui)
     implementation(libs.navigationevent.compose)
+    implementation(libs.commons.compress)
+    implementation(libs.androidx.core)
+    implementation(libs.coil.compose) {
+        exclude(group = "androidx.appcompat", module = "appcompat-resources")
+    }
+    implementation(libs.coil.gif) {
+        exclude(group = "androidx.appcompat", module = "appcompat-resources")
+    }
+    implementation(libs.coil.svg) {
+        exclude(group = "androidx.appcompat", module = "appcompat-resources")
+    }
+    implementation(project(":onboarding"))
+    implementation(project(":provision-baseline"))
     implementation("com.github.termux.termux-app:terminal-emulator:$termuxVersion:release@aar")
     implementation(project(":terminal-view-hdr"))
 

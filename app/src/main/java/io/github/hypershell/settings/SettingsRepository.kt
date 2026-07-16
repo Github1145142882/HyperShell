@@ -9,26 +9,56 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.hypershell.onboarding.CURRENT_ONBOARDING_VERSION
+import io.github.hypershell.onboarding.OnboardingStep
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
 private val Context.hyperShellSettings by preferencesDataStore(name = "settings")
 
+data class SettingsSnapshot(
+    val settings: AppSettings,
+    val completedOnboardingVersion: Int,
+    val pendingOnboardingStep: OnboardingStep,
+)
+
 class SettingsRepository(private val context: Context) {
-    val settings: Flow<AppSettings> = context.hyperShellSettings.data.map(::decode)
+    val snapshot: Flow<SettingsSnapshot> = context.hyperShellSettings.data.map { preferences ->
+        SettingsSnapshot(
+            settings = decode(preferences),
+            completedOnboardingVersion = preferences[Keys.completedOnboardingVersion] ?: 0,
+            pendingOnboardingStep = decodeOnboardingStep(preferences[Keys.pendingOnboardingStep]),
+        )
+    }
+    val settings: Flow<AppSettings> = snapshot.map { it.settings }.distinctUntilChanged()
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         context.hyperShellSettings.edit { preferences -> encode(preferences, transform(decode(preferences))) }
     }
 
+    suspend fun updatePendingOnboardingStep(step: OnboardingStep) {
+        context.hyperShellSettings.edit { preferences ->
+            preferences[Keys.pendingOnboardingStep] = step.name
+        }
+    }
+
+    suspend fun completeOnboarding() {
+        context.hyperShellSettings.edit { preferences ->
+            preferences[Keys.completedOnboardingVersion] = CURRENT_ONBOARDING_VERSION
+            preferences[Keys.pendingOnboardingStep] = OnboardingStep.Welcome.name
+        }
+    }
+
     private fun decode(p: Preferences) = AppSettings(
         showHiddenFiles = p[Keys.showHiddenFiles] ?: true,
+        colorfulFileTheme = p[Keys.colorfulFileTheme] ?: false,
         fileLayoutMode = enumValueOrDefault(p[Keys.fileLayoutMode], FileLayoutMode.Dual),
         fileSortMode = enumValueOrDefault(p[Keys.fileSortMode], FileSortMode.Name),
         editorLimit = enumValueOrDefault(p[Keys.editorLimit], EditorLimit.MiB4),
         scriptUseRoot = p[Keys.scriptUseRoot] ?: true,
         scriptPermission = enumValueOrDefault(p[Keys.scriptPermission], ScriptPermission.Unchanged),
-        themeSource = enumValueOrDefault(p[Keys.themeSource], ThemeSource.Monet),
+        themeSource = enumValueOrDefault(p[Keys.themeSource], ThemeSource.Standard),
         brightnessMode = enumValueOrDefault(p[Keys.brightnessMode], BrightnessMode.System),
         terminalFontSize = (p[Keys.terminalFontSize] ?: 13f).coerceIn(9f, 28f),
         pageTopBarBlur = p[Keys.pageTopBarBlur] ?: p[Keys.bottomBarBlur] ?: true,
@@ -36,7 +66,12 @@ class SettingsRepository(private val context: Context) {
         paletteStyle = p[Keys.paletteStyle] ?: "TonalSpot",
         colorSpec = p[Keys.colorSpec] ?: "Spec2021",
         bottomBarStyle = decodeBottomBarStyle(p),
-        bottomBarHdrFeedback = p[Keys.bottomBarHdrFeedback] ?: true,
+        bottomBarHdrFeedback = decodeBottomBarHdrFeedback(p[Keys.bottomBarHdrFeedback]),
+        showWelcomeOnLaunch = p[Keys.showWelcomeOnLaunch] ?: false,
+        defaultTerminalEnvironment = enumValueOrDefault(
+            p[Keys.defaultTerminalEnvironment],
+            DefaultTerminalEnvironment.Termux,
+        ),
         terminalTopBlur = p[Keys.terminalTopBlur] ?: true,
         keepTerminalInBackground = p[Keys.keepTerminalInBackground] ?: false,
         terminalBackgroundColor = p[Keys.terminalBackgroundColor] ?: 0xFF000000.toInt(),
@@ -51,6 +86,7 @@ class SettingsRepository(private val context: Context) {
 
     private fun encode(p: androidx.datastore.preferences.core.MutablePreferences, s: AppSettings) {
         p[Keys.showHiddenFiles] = s.showHiddenFiles
+        p[Keys.colorfulFileTheme] = s.colorfulFileTheme
         p[Keys.fileLayoutMode] = s.fileLayoutMode.name
         p[Keys.fileSortMode] = s.fileSortMode.name
         p[Keys.editorLimit] = s.editorLimit.name
@@ -65,6 +101,8 @@ class SettingsRepository(private val context: Context) {
         p[Keys.colorSpec] = s.colorSpec
         p[Keys.bottomBarStyle] = s.bottomBarStyle.name
         p[Keys.bottomBarHdrFeedback] = s.bottomBarHdrFeedback
+        p[Keys.showWelcomeOnLaunch] = s.showWelcomeOnLaunch
+        p[Keys.defaultTerminalEnvironment] = s.defaultTerminalEnvironment.name
         p[Keys.terminalTopBlur] = s.terminalTopBlur
         p[Keys.keepTerminalInBackground] = s.keepTerminalInBackground
         p[Keys.terminalBackgroundColor] = s.terminalBackgroundColor
@@ -94,6 +132,7 @@ class SettingsRepository(private val context: Context) {
         val scrollbackLines = intPreferencesKey("scrollback_lines")
         val commandHistoryLimit = intPreferencesKey("command_history_limit")
         val showHiddenFiles = booleanPreferencesKey("show_hidden_files")
+        val colorfulFileTheme = booleanPreferencesKey("colorful_file_theme")
         val fileLayoutMode = stringPreferencesKey("file_layout_mode")
         val fileSortMode = stringPreferencesKey("file_sort_mode")
         val editorLimit = stringPreferencesKey("editor_limit")
@@ -112,6 +151,8 @@ class SettingsRepository(private val context: Context) {
         val floatingBottomBarGlass = booleanPreferencesKey("floating_bottom_bar_glass")
         val bottomBarStyle = stringPreferencesKey("bottom_bar_style")
         val bottomBarHdrFeedback = booleanPreferencesKey("bottom_bar_hdr_feedback")
+        val showWelcomeOnLaunch = booleanPreferencesKey("show_welcome_on_launch")
+        val defaultTerminalEnvironment = stringPreferencesKey("default_terminal_environment")
         val terminalTopBlur = booleanPreferencesKey("terminal_top_blur")
         val keepTerminalInBackground = booleanPreferencesKey("keep_terminal_in_background")
         val terminalBackgroundColor = intPreferencesKey("terminal_background_color")
@@ -122,8 +163,16 @@ class SettingsRepository(private val context: Context) {
         val terminalFont = stringPreferencesKey("terminal_font")
         val customTerminalFontPath = stringPreferencesKey("custom_terminal_font_path")
         val bookmarks = stringSetPreferencesKey("bookmarks")
+        val completedOnboardingVersion = intPreferencesKey("completed_onboarding_version")
+        val pendingOnboardingStep = stringPreferencesKey("pending_onboarding_step")
     }
 }
+
+internal fun decodeBottomBarHdrFeedback(value: Boolean?): Boolean = value ?: false
+
+internal fun decodeOnboardingStep(value: String?): OnboardingStep =
+    value?.let { runCatching { enumValueOf<OnboardingStep>(it) }.getOrNull() }
+        ?: OnboardingStep.Welcome
 
 internal fun migrateBottomBarStyle(stored: String?, floating: Boolean, glass: Boolean): BottomBarStyle {
     stored?.let { runCatching { enumValueOf<BottomBarStyle>(it) }.getOrNull()?.let { value -> return value } }
